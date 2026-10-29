@@ -1,0 +1,283 @@
+from django.conf import settings
+from django.db import models
+from django.utils import timezone
+import uuid
+
+
+class Timestamped(models.Model):
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        abstract = True
+
+
+class Customer(Timestamped):
+    source = models.CharField(max_length=40, default="zakup")
+    source_id = models.BigIntegerField()
+    bin = models.CharField(max_length=12, blank=True)
+    name = models.TextField()
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["source", "source_id"], name="unique_customer_source")]
+
+    def __str__(self):
+        return self.name[:100]
+
+
+class Announcement(Timestamped):
+    source = models.CharField(max_length=40, default="zakup")
+    source_id = models.BigIntegerField()
+    external_id = models.BigIntegerField(null=True, blank=True)
+    number = models.CharField(max_length=100, blank=True)
+    name = models.TextField()
+    status = models.CharField(max_length=150, blank=True)
+    deadline = models.DateTimeField(null=True, blank=True, db_index=True)
+    checked_at = models.DateTimeField(null=True, blank=True)
+    raw = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["source", "source_id"], name="unique_announcement_source")]
+
+    def __str__(self):
+        return f"{self.number}: {self.name[:80]}"
+
+
+class Lot(Timestamped):
+    source_id = models.BigIntegerField()
+    announcement = models.ForeignKey(Announcement, on_delete=models.CASCADE, related_name="lots")
+    customer = models.ForeignKey(Customer, null=True, blank=True, on_delete=models.SET_NULL)
+    external_id = models.BigIntegerField(null=True, blank=True)
+    number = models.CharField(max_length=100, blank=True)
+    name = models.TextField()
+    description = models.TextField(blank=True)
+    amount = models.DecimalField(max_digits=22, decimal_places=2, null=True, blank=True)
+    status = models.CharField(max_length=150, blank=True)
+    raw = models.JSONField(default=dict, blank=True)
+    checked_at = models.DateTimeField(null=True, blank=True)
+    refresh_started_at = models.DateTimeField(null=True, blank=True)
+    refresh_state = models.CharField(max_length=20, blank=True)
+    refresh_error = models.TextField(blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["announcement", "source_id"], name="unique_lot_source")]
+
+    def __str__(self):
+        return f"{self.number}: {self.name[:80]}"
+
+
+class Document(Timestamped):
+    announcement = models.ForeignKey(Announcement, on_delete=models.CASCADE, related_name="documents")
+    lot = models.ForeignKey(Lot, null=True, blank=True, on_delete=models.SET_NULL)
+    source_id = models.CharField(max_length=100)
+    name = models.TextField()
+    url = models.URLField(max_length=2000)
+    status = models.CharField(max_length=30, default="pending", db_index=True)
+    error = models.TextField(blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["announcement", "source_id"], name="unique_document_source")]
+
+    def __str__(self):
+        return self.name[:100]
+
+
+class DocumentVersion(Timestamped):
+    document = models.ForeignKey(Document, on_delete=models.CASCADE, related_name="versions")
+    sha256 = models.CharField(max_length=64, db_index=True)
+    storage_path = models.CharField(max_length=500, blank=True)
+    text = models.TextField(blank=True)
+    pages = models.JSONField(default=list, blank=True)
+    used_ocr = models.BooleanField(default=False)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["document", "sha256"], name="unique_document_version")]
+
+
+class LotDocumentDownload(Timestamped):
+    lot = models.OneToOneField(Lot, on_delete=models.CASCADE, related_name="document_download")
+    state = models.CharField(max_length=20, default="queued")
+    error = models.CharField(max_length=300, blank=True)
+
+
+class AnnouncementLotCache(models.Model):
+    source_id = models.BigIntegerField(primary_key=True)
+    rows = models.JSONField(default=list)
+    checked_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+
+class SearchProfile(Timestamped):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    name = models.CharField(max_length=200)
+    include_terms = models.JSONField(default=list)
+    exclude_terms = models.JSONField(default=list, blank=True)
+    mode = models.CharField(max_length=3, choices=[("any", "ИЛИ"), ("all", "И")], default="any")
+    filters = models.JSONField(default=dict, blank=True)
+    enabled = models.BooleanField(default=False)
+    interval_minutes = models.PositiveIntegerField(default=60)
+    baseline_at = models.DateTimeField(null=True, blank=True)
+    index_baseline_at = models.DateTimeField(null=True, blank=True)
+    last_monitor_at = models.DateTimeField(null=True, blank=True)
+    next_monitor_at = models.DateTimeField(null=True, blank=True)
+    monitor_lease = models.CharField(max_length=64, blank=True)
+    monitor_lease_until = models.DateTimeField(null=True, blank=True)
+    monitor_error = models.TextField(blank=True)
+
+    @property
+    def interval_hours(self):
+        return str(min(12, max(1, (self.interval_minutes + 59)//60)))
+
+    def __str__(self):
+        return self.name
+
+
+class SearchRun(Timestamped):
+    profile = models.ForeignKey(SearchProfile, on_delete=models.CASCADE, related_name="runs")
+    status = models.CharField(max_length=30, default="pending")
+    finished_at = models.DateTimeField(null=True, blank=True)
+    complete = models.BooleanField(default=False)
+    error = models.TextField(blank=True)
+
+
+class Match(Timestamped):
+    run = models.ForeignKey(SearchRun, on_delete=models.CASCADE)
+    lot = models.ForeignKey(Lot, null=True, blank=True, on_delete=models.SET_NULL)
+    version = models.ForeignKey(DocumentVersion, null=True, blank=True, on_delete=models.SET_NULL)
+    term = models.TextField()
+    snippet = models.TextField(blank=True)
+    page_number = models.PositiveIntegerField(null=True, blank=True)
+
+
+class Favorite(Timestamped):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["owner", "lot"], name="unique_user_favorite")]
+
+
+class Notification(Timestamped):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    dedup_key = models.CharField(max_length=200)
+    message = models.TextField()
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["owner", "dedup_key"], name="unique_user_notification")]
+
+
+class ReferenceEntry(models.Model):
+    kind = models.CharField(max_length=40)
+    source_id = models.BigIntegerField()
+    name = models.CharField(max_length=500)
+    raw = models.JSONField(default=dict)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["kind", "source_id"], name="unique_reference_entry")]
+        ordering = ["name"]
+
+
+class WebSearch(Timestamped):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    specification = models.JSONField()
+    status = models.CharField(max_length=20, default="queued", db_index=True)
+    scanned = models.PositiveIntegerField(default=0)
+    source_counts = models.JSONField(default=dict)
+    complete = models.BooleanField(default=False)
+    error = models.TextField(blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+
+class SearchHit(models.Model):
+    search = models.ForeignKey(WebSearch, on_delete=models.CASCADE, related_name="hits")
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
+    terms = models.JSONField(default=list)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["search", "lot"], name="unique_search_hit")]
+
+
+class IndexedLot(models.Model):
+    source_id = models.BigIntegerField(primary_key=True)
+    row = models.JSONField()
+    deadline = models.DateTimeField(db_index=True)
+    status_id = models.PositiveIntegerField(db_index=True)
+    method_id = models.PositiveIntegerField(db_index=True)
+    indexed_at = models.DateTimeField(default=timezone.now)
+    seen_cycle = models.CharField(max_length=64, blank=True, db_index=True)
+    current = models.BooleanField(default=True, db_index=True)
+
+
+class ProcurementIndex(models.Model):
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1)
+    cycle = models.CharField(max_length=64, blank=True)
+    started_at = models.DateTimeField(null=True)
+    completed_at = models.DateTimeField(null=True)
+    heartbeat_at = models.DateTimeField(null=True)
+    next_run_at = models.DateTimeField(null=True)
+    pending = models.JSONField(default=list)
+    source_count = models.PositiveIntegerField(default=0)
+    processed = models.PositiveIntegerField(default=0)
+    lease = models.CharField(max_length=64, blank=True)
+    lease_until = models.DateTimeField(null=True)
+    error = models.CharField(max_length=300, blank=True)
+    paused = models.BooleanField(default=False)
+
+
+class TelegramSubscription(Timestamped):
+    owner = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    chat_id = models.BigIntegerField(null=True, blank=True, unique=True)
+    enabled = models.BooleanField(default=False)
+    link_hash = models.CharField(max_length=64, blank=True, db_index=True)
+    link_expires_at = models.DateTimeField(null=True, blank=True)
+
+class TelegramSeen(models.Model):
+    profile = models.ForeignKey(SearchProfile, on_delete=models.CASCADE)
+    announcement_key = models.CharField(max_length=64)
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["profile", "announcement_key"], name="unique_profile_seen_announcement")]
+
+class TelegramDelivery(Timestamped):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    profile = models.ForeignKey(SearchProfile, on_delete=models.CASCADE)
+    announcement_key = models.CharField(max_length=64)
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
+    state = models.CharField(max_length=20, default="pending")
+    error = models.CharField(max_length=200, blank=True)
+    message_id = models.BigIntegerField(null=True, blank=True)
+    retry_at = models.DateTimeField(null=True, blank=True)
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["owner", "announcement_key"], name="unique_owner_telegram_announcement")]
+
+class TelegramCursor(models.Model):
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1)
+    offset = models.BigIntegerField(default=0)
+
+
+class AnnouncementWatch(Timestamped):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    announcement = models.ForeignKey(Announcement, on_delete=models.CASCADE)
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
+    enabled = models.BooleanField(default=False)
+    generation = models.CharField(max_length=64, blank=True)
+    last_status = models.CharField(max_length=200, blank=True)
+    last_status_name = models.CharField(max_length=300, blank=True)
+    revision = models.PositiveIntegerField(default=0)
+    checked_at = models.DateTimeField(null=True, blank=True)
+    next_check_at = models.DateTimeField(null=True, blank=True)
+    lease = models.CharField(max_length=64, blank=True)
+    lease_until = models.DateTimeField(null=True, blank=True)
+    error = models.CharField(max_length=200, blank=True)
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["owner", "announcement"], name="unique_owner_announcement_watch")]
+
+class StatusDelivery(Timestamped):
+    watch = models.ForeignKey(AnnouncementWatch, on_delete=models.CASCADE)
+    generation = models.CharField(max_length=64)
+    event_key = models.CharField(max_length=150, unique=True)
+    payload = models.JSONField(default=dict)
+    state = models.CharField(max_length=20, default="pending")
+    error = models.CharField(max_length=200, blank=True)
+    retry_at = models.DateTimeField(null=True, blank=True)
+    message_id = models.BigIntegerField(null=True, blank=True)

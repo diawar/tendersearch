@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tender-search"
+version = "0.1.0"
+description = "Read-only client for public zakup.gov.kz procurement data"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.28,<0.29",
+    "Django>=5.2,<5.3",
+    "psycopg[binary]>=3.2,<4",
+    "celery[redis]>=5.5,<6",
+    "gunicorn>=23,<24; sys_platform != 'win32'",
+    "whitenoise>=6.8,<7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "pypdf>=6,<7"]
+
+[project.scripts]
+tender-search = "tender_search.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"tender_search.core" = ["templates/**/*.html", "static/core/*", "fixtures/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

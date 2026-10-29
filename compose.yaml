@@ -1,0 +1,123 @@
+name: tender-search
+
+x-app: &app
+  image: tender-search:local
+  pull_policy: never
+  environment: &environment
+    DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Run scripts/setup_local.py first}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run scripts/setup_local.py first}
+    POSTGRES_HOST: db
+    DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+    REDIS_URL: redis://redis:6379/0
+    TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-tender_over_bot}
+  volumes:
+    - documents:/app/data
+  init: true
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: tender_search
+      POSTGRES_USER: tender_search
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run scripts/setup_local.py first}
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U tender_search -d tender_search"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    mem_limit: 512m
+
+  redis:
+    image: redis:7-alpine
+    command: [redis-server, --appendonly, "yes", --maxmemory, 128mb, --maxmemory-policy, noeviction]
+    volumes:
+      - queue:/data
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    mem_limit: 256m
+
+  initialize:
+    <<: *app
+    command: [python, manage.py, initialize]
+    environment:
+      <<: *environment
+      DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME:-admin}
+      DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD:?Run scripts/setup_local.py first}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    <<: *app
+    build: .
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8000}:8000"
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    mem_limit: 512m
+
+  worker:
+    <<: *app
+    command: [celery, -A, tender_search.web, worker, --loglevel=INFO, --concurrency=1, --max-tasks-per-child=50, -Q, celery, -n, background@%h]
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 512m
+
+  search-worker:
+    <<: *app
+    command: [celery, -A, tender_search.web, worker, --loglevel=INFO, --concurrency=1, --max-tasks-per-child=50, -Q, interactive, -n, interactive@%h]
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 512m
+
+  indexer:
+    <<: *app
+    command: [python, manage.py, index_procurements]
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 384m
+
+  telegram:
+    <<: *app
+    command: [python, manage.py, telegram_monitor]
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 256m
+
+volumes:
+  database:
+  documents:
+  queue:

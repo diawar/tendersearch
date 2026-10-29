@@ -1,0 +1,27 @@
+# Temporary public HTTPS access through a separate web process.
+# The original localhost service and its cookies are unchanged.
+services:
+  tunnel-web:
+    image: tender-search:local
+    pull_policy: never
+    command: [gunicorn, tender_search.web.wsgi:application, --bind, "0.0.0.0:8000", --workers, "1", --threads, "2", --timeout, "60", --forwarded-allow-ips, "*", --access-logfile, "-"]
+    environment:
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Local environment required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Local environment required}
+      POSTGRES_HOST: db
+      DJANGO_ALLOWED_HOSTS: ${TUNNEL_HOST:?Generated tunnel hostname required}
+      CSRF_TRUSTED_ORIGINS: https://${TUNNEL_HOST}
+      HTTPS_ENABLED: "1"
+      REDIS_URL: redis://redis:6379/0
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-tender_over_bot}
+    volumes:
+      - documents:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    init: true
+    restart: "no"
+    mem_limit: 384m

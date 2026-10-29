@@ -1,0 +1,7 @@
+<div class="panel index-coverage" id="index-coverage" role="status" hx-get="{% url 'index_status' %}" hx-trigger="every 15s" hx-swap="outerHTML">
+<strong>База активных закупок</strong>
+<span>Загружено {{ index_coverage.loaded }} лотов{% if index_coverage.source_count %} · в последней оценке портала ≈ {{ index_coverage.source_count }}{% endif %}</span>
+{% if index_coverage.missing_details %}<span>Ожидают повторной проверки описаний: {{ index_coverage.missing_details }}. Остальные лоты продолжают загружаться.</span>{% endif %}
+{% if index_coverage.paused %}<span>Загрузка приостановлена.</span>{% elif index_coverage.error %}<span class="error">{{ index_coverage.error }}</span>{% elif not index_coverage.completed_at %}<span>Первоначальная загрузка. Поиск проверяет накопленные данные; пока найдены не все закупки.</span>{% elif not index_coverage.ready %}<span>Данные требуют обновления. Полнота не подтверждена.</span>{% else %}<span>Полный обход списка завершён: {{ index_coverage.completed_date|date:'d.m.Y H:i' }}. Данные обновляются в фоне.</span>{% endif %}
+<small>Все способы · опубликованные закупки с неистёкшим сроком подачи, включая ожидающие начала. Архив и остальные статусы полностью не загружаются. База обновляется круглосуточно.</small>
+</div>

@@ -1,0 +1,3 @@
+{% extends 'core/base.html' %}
+{% block title %}{{ lot.name }} — GoszakupOver{% endblock %}
+{% block content %}<a href="{% url 'favorites' %}">← В избранное</a>{% include 'core/_lot_detail.html' %}{% endblock %}

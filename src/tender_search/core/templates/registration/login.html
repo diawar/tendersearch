@@ -1,0 +1,7 @@
+{% extends 'core/base.html' %}
+{% block title %}Вход — GoszakupOver{% endblock %}
+{% block content %}
+<section class="login panel"><p class="eyebrow">ЛИЧНЫЙ КАБИНЕТ</p><h1>Вход</h1><p class="muted">Используйте учётную запись, созданную администратором сервиса.</p>
+{% if form.errors %}<p role="alert" class="error">Не удалось войти. Проверьте имя пользователя и пароль.</p>{% endif %}
+<form method="post">{% csrf_token %}<label for="id_username">Имя пользователя</label><input id="id_username" name="username" autocomplete="username" required autofocus maxlength="150"><label for="id_password">Пароль</label><input id="id_password" name="password" type="password" autocomplete="current-password" required><input type="hidden" name="next" value="{{ next }}"><button class="primary" type="submit">Войти</button></form></section>
+{% endblock %}
