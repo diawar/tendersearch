@@ -137,7 +137,8 @@ def search_results(request, job_id):
     spec = job.specification
     initial = {"terms": "; ".join(spec.get("terms", [])), "exclude": "; ".join(spec.get("exclude", [])),
                "mode": spec.get("mode", "any"), "kind": spec.get("kind", "contains"), "pages": spec.get("pages", 1), "depth": spec.get("depth", 500),
-               "customer_bin": spec.get("customer_bin", "")}
+               "customer_bin": spec.get("customer_bin", ""),
+               "only_advance": spec.get("filters", {}).get("only_advance", False)}
     for field, param in [("amount_min", "total_price__gte"), ("amount_max", "total_price__lte"),
                          ("deadline_from", "offer_end_date__gte"), ("deadline_to", "offer_end_date__lte"),
                          ("status", "status_id"), ("method", "purchase_method_id"), ("region", "delivery_address_id__in")]:

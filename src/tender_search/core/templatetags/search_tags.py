@@ -5,6 +5,16 @@ from django.utils.html import format_html_join, format_html
 register = template.Library()
 
 
+@register.simple_tag
+def deadline_remaining(deadline):
+    from tender_search.core.deadlines import remaining_time
+    text, urgent = remaining_time(deadline)
+    if not text:
+        return ''
+    return format_html('<span class="deadline-remaining{}">{}</span>',
+                       ' deadline-remaining--urgent' if urgent else '', text)
+
+
 @register.filter
 def highlight(value, terms):
     text = str(value or "")

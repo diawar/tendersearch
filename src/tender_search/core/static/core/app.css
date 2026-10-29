@@ -80,3 +80,5 @@ button.is-searching>.icon{display:none}button .button-spinner{width:15px;height:
 .procurement-group{border-bottom:1px solid #e5ebf2}.procurement-group>summary{display:flex;align-items:center;gap:8px;padding:9px 5px;font-weight:600;cursor:pointer}.procurement-group>summary::after{content:"⌄";margin-left:auto;color:#8795a8}.procurement-group[open]>summary::after{content:"⌃"}.procurement-group input{accent-color:#078fe7}.procurement-children{padding:0 5px 8px 20px}.procurement-children label{display:flex;align-items:flex-start;gap:7px;padding:6px 0;font-size:11px}.procurement-group>summary input{flex:none}
 
 .index-coverage{display:flex;flex-wrap:wrap;gap:6px 16px;padding:12px 16px;margin-bottom:12px;font-size:12px}.index-coverage small{flex-basis:100%;color:#687c95}
+.search-form .advance-filter{display:flex;align-items:center;gap:7px;margin-top:10px;cursor:pointer;width:fit-content}.search-form .advance-filter input{width:15px;height:15px;margin:0;accent-color:#27875a}
+.deadline-remaining{display:block;margin-top:5px;font-size:12px;color:#607386;line-height:1.4}.deadline-remaining.deadline-remaining--urgent{color:#c43737;font-weight:600}

@@ -28,6 +28,53 @@ def put(data):
 
 @override_settings(STORAGES={'default':{'BACKEND':'django.core.files.storage.FileSystemStorage'},'staticfiles':{'BACKEND':'django.contrib.staticfiles.storage.StaticFilesStorage'}})
 class IndexTests(TestCase):
+    def test_missing_method_does_not_stop_collection(self):
+        api = Mock()
+        no_method = row(purchase_method_id=None)
+        absent_method = row(2)
+        absent_method.pop('purchase_method_id')
+        api.search.return_value = Page(2, [no_method, absent_method], None)
+        api.announcement_lots.return_value = [no_method, absent_method]
+        self.assertTrue(collect_index_page(api))
+        self.assertEqual(IndexedLot.objects.filter(method_id__isnull=True).count(), 2)
+        self.assertEqual(self.search().hits.count(), 0)
+        self.assertEqual(self.search(filters={'status_id__in': '6__7__9'}).hits.count(), 2)
+
+    def test_advance_filter_and_cached_detail_fields(self):
+        from .advances import has_advance
+        from .index_service import save_index_row
+        cases = [({'plan_items': [{'prepayment': 30}]}, True),
+                 ({'plan_items': [{'prepayment': 0, 'specifics': [{'prepayment': 30}]}]}, True),
+                 ({'plan_items': [{'prepayment': '0'}]}, False),
+                 ({'plan_items': [{'prepayment': None}]}, None),
+                 ({'plan_items': [{'prepayment': 'NaN'}]}, None), (None, None)]
+        for identifier, (detail, expected) in enumerate(cases, 1):
+            self.assertIs(has_advance(detail), expected)
+            save_index_row(row(identifier), detail, 'test')
+        self.assertEqual(self.search().hits.count(), 6)
+        with patch('tender_search.client.ZakupClient.search', side_effect=AssertionError('Network forbidden')):
+            job = self.search(filters=dict(self.spec['filters'], only_advance=True))
+        self.assertEqual(set(job.hits.values_list('lot__source_id', flat=True)), {1, 2})
+
+    def test_advance_checkbox_profile_and_result_roundtrip(self):
+        data = {'terms': 'flash', 'mode': 'any', 'kind': 'contains', 'number_kind': 'lot_number'}
+        form = SearchForm(data)
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertNotIn('only_advance', form.specification()['filters'])
+        self.assertFalse(SearchForm()['only_advance'].value())
+        self.client.force_login(self.owner)
+        response = self.client.post('/search/', dict(data, only_advance='on', action='save'))
+        profile = SearchProfile.objects.get(owner=self.owner)
+        self.assertIs(profile.filters['specification']['filters']['only_advance'], True)
+        response = self.client.get(response.url)
+        self.assertTrue(response.context['form']['only_advance'].value())
+        job = self.search(filters=dict(self.spec['filters'], only_advance=True))
+        response = self.client.get(f'/search/{job.pk}/')
+        self.assertTrue(response.context['form']['only_advance'].value())
+        self.client.post('/search/', dict(data, action='save', profile_id=profile.pk))
+        profile.refresh_from_db()
+        self.assertNotIn('only_advance', profile.filters['specification']['filters'])
+
     def test_collector_runs_outside_telegram_hours(self):
         from django.core.management import call_command
         from io import StringIO

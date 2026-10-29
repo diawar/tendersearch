@@ -203,7 +203,7 @@ class IndexedLot(models.Model):
     row = models.JSONField()
     deadline = models.DateTimeField(db_index=True)
     status_id = models.PositiveIntegerField(db_index=True)
-    method_id = models.PositiveIntegerField(db_index=True)
+    method_id = models.PositiveIntegerField(db_index=True, null=True, blank=True)
     indexed_at = models.DateTimeField(default=timezone.now)
     seen_cycle = models.CharField(max_length=64, blank=True, db_index=True)
     current = models.BooleanField(default=True, db_index=True)

@@ -162,6 +162,7 @@ def scan_profile(profile_id, lease):
             SearchProfile.objects.filter(pk=profile_id,monitor_lease=lease).update(last_monitor_at=timezone.now(),next_monitor_at=timezone.now()+timedelta(minutes=max(1,current.interval_minutes)),monitor_lease='',monitor_lease_until=None)
 
 def message_for(delivery):
+    from .deadlines import telegram_remaining_time
     lot, profile = delivery.lot, delivery.profile
     esc = lambda text, length: escape(str(text or '')[:length])
     deadline = lot.announcement.deadline.astimezone(ALMATY).strftime('%d.%m.%Y %H:%M') if lot.announcement.deadline else 'Уточните на портале'
@@ -175,6 +176,7 @@ def message_for(delivery):
             f'📦 Лот: {esc(lot.name,500)}\n💰 Сумма лота: <b>{esc(amount,100)}</b>\n'
             f'🏢 {esc(lot.customer.name if lot.customer else "Заказчик не указан",350)}\n'
             f'⏳ Приём до: <b>{deadline}</b> (Алматы)\n'
+            f'{telegram_remaining_time(lot.announcement.deadline)}'
             f'\nПроверьте актуальные условия на портале.')
     url = f'https://zakup.gov.kz/announcement/{lot.announcement.source_id}#lot-{lot.source_id}'
     return {'text':body,'parse_mode':'HTML','link_preview_options':{'is_disabled':True},'reply_markup':{'inline_keyboard':[[{'text':'Открыть на госзакупе ↗','url':url}]]}}

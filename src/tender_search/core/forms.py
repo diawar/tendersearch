@@ -25,6 +25,7 @@ class SearchForm(forms.Form):
                               help_text="Исключаем вхождения текста в названии и описании: услуг → услуги, ремонт → ремонта.")
     amount_min = forms.DecimalField(label="Сумма от, ₸", required=False, min_value=0, max_digits=18, decimal_places=2)
     amount_max = forms.DecimalField(label="Сумма до, ₸", required=False, min_value=0, max_digits=18, decimal_places=2)
+    only_advance = forms.BooleanField(label="Только с авансом", required=False, initial=False)
     deadline_from = forms.DateField(label="Приём заявок до — начиная с", required=False, widget=forms.DateInput(attrs={"type": "date"}))
     deadline_to = forms.DateField(label="Приём заявок до — по", required=False, widget=forms.DateInput(attrs={"type": "date"}))
     status = forms.MultipleChoiceField(label="Статус лота", required=False, widget=forms.CheckboxSelectMultiple)
@@ -100,6 +101,8 @@ class SearchForm(forms.Form):
             filters["delivery_address_id__in"] = "__".join(dict.fromkeys(addresses))
         if data.get("number"):
             filters[data["number_kind"]] = data["number"].strip()
+        if data.get("only_advance"):
+            filters["only_advance"] = True
         return {"terms": data["terms"], "exclude": data["exclude"], "kind": data["kind"],
                 "mode": data["mode"], "backend": "local_index", "pages": 10, "auto_pages": False, "extended_descriptions": True, "filters": filters,
                 "customer_bin": data.get("customer_bin", ""), "regions": regions, "cities": cities, "defaults_version": 1, "status_selection": data.get("status", [])}

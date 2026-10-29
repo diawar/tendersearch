@@ -68,7 +68,7 @@ document.addEventListener('click',event=>{
   const values=button.dataset.conditionValues?JSON.parse(button.dataset.conditionValues):null;
   clearFilterBoxes([...form.querySelectorAll('input[name="'+field+'"]')].filter(box=>values?values.includes(box.value):box.closest('label').textContent.trim()===value));
  }else{
-  const input=form.elements.namedItem(field);if(input){input.value=['mode','kind','depth'].includes(field)?value:'';input.dispatchEvent(new Event('change',{bubbles:true}));}
+  const input=form.elements.namedItem(field);if(input){if(input.type==='checkbox')input.checked=false;else input.value=['mode','kind','depth'].includes(field)?value:'';input.dispatchEvent(new Event('change',{bubbles:true}));}
  }
  button.closest('.condition-chip').remove();const hint=document.querySelector('.conditions-changed');if(hint)hint.hidden=false;
 });
@@ -109,6 +109,7 @@ if(conditionsForm&&liveConditions){
   for(const [name,label] of [['status','Статус'],['method','Способ закупки'],['region','Область'],['city','Город']]){
    selectedFilterItems(conditionsForm,name).forEach(item=>add(label+': '+item.label,name,item.label,'condition-procurement',true,item.boxes.map(box=>box.value)));
   }
+  if(conditionsForm.elements.namedItem('only_advance')?.checked)add('Только с авансом','only_advance','on','condition-procurement');
   for(const [name,label] of [['deadline_from','Окончание приёма от'],['deadline_to','Окончание приёма до']]){if(value(name))add(label+': '+value(name).split('-').reverse().join('.'),name,value(name),'condition-procurement');}
   if(value('number'))add((value('number_kind')==='announcement_number'?'Номер объявления: ':'Номер лота: ')+value('number'),'number',value('number'),'condition-procurement');
   words('exclude').forEach(word=>add(word,'exclude',word,'condition-exclude'));

@@ -10,6 +10,7 @@ from tender_search.client import SourceError, utc_datetime
 from tender_search.matching import match_lot
 from .models import IndexedLot, ProcurementIndex, ReferenceEntry, WebSearch, SearchHit
 from .procurement_groups import status_matches
+from .advances import has_advance
 from .search_service import announcement_details, extended_description, lot_identity, store_lot
 
 ACTIVE_STATUSES = {6, 7, 9}
@@ -23,10 +24,11 @@ def incomplete_rows():
 
 def save_index_row(row, detail, cycle):
     enriched = dict(row, description_ru=extended_description(row, detail),
-                    _extended_description=detail is not None, _details_pending=detail is None)
+                    _extended_description=detail is not None, _details_pending=detail is None,
+                    _has_advance=has_advance(detail))
     IndexedLot.objects.update_or_create(source_id=row['id'], defaults={
         'row': enriched, 'deadline': utc_datetime(row['offer_end_date']),
-        'status_id': row['status']['id'], 'method_id': row['purchase_method_id'],
+        'status_id': row['status']['id'], 'method_id': row.get('purchase_method_id'),
         'indexed_at': timezone.now(), 'seen_cycle': cycle, 'current': True})
 
 
@@ -160,6 +162,8 @@ def collect_index_page(api):
 
 def local_matches(row, spec, now, address_prefixes):
     filters = spec.get('filters', {})
+    if filters.get('only_advance') and row.get('_has_advance') is not True:
+        return False
     if not status_matches(row, spec.get('status_selection', []), now):
         return False
     customer_bin = spec.get('customer_bin')
