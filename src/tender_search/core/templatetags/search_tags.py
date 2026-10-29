@@ -6,6 +6,16 @@ register = template.Library()
 
 
 @register.simple_tag
+def procurement_source_badge(lot):
+    system = (lot.raw or {}).get('system') or {}
+    if not system:
+        system = (lot.announcement.raw or {}).get('system') or {}
+    if isinstance(system, dict) and str(system.get('id')) == '3':
+        return format_html('<span class="source-badge" title="Площадка закупки: Самрук-Казына">{}</span>', 'Самрук-Казына')
+    return ''
+
+
+@register.simple_tag
 def deadline_remaining(deadline):
     from tender_search.core.deadlines import remaining_time
     text, urgent = remaining_time(deadline)
