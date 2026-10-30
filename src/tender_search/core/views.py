@@ -1,4 +1,5 @@
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import PermissionDenied
 from django.db import connection, transaction
 from django.db.models import DateTimeField, F, Q
 from django.db.models.fields.json import KeyTextTransform
@@ -11,6 +12,8 @@ from django.views.decorators.http import require_POST
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from datetime import timedelta
+from urllib.parse import urlsplit
+from django.urls import reverse
 
 from .models import Favorite, Notification, SearchProfile, WebSearch, Lot, TelegramSubscription, TelegramDelivery, AnnouncementWatch, StatusDelivery, Document, DocumentVersion, LotDocumentDownload
 from .forms import SearchForm
@@ -21,6 +24,8 @@ from tender_search.client import utc_datetime, SchemaError
 
 @login_required
 def index_status(request):
+    if not request.user.is_staff:
+        raise PermissionDenied
     return render(request, 'core/_index_coverage.html')
 
 
@@ -47,6 +52,8 @@ def search(request):
         if request.POST.get("action") == "save":
             values = {key: (request.POST.getlist(key) if key in {"region", "city", "status", "method"} else request.POST.get(key, "")) for key in form.fields}
             values["_defaults_version"] = 1
+            values["kind"] = form.cleaned_data["kind"]
+            values["terms"] = "; ".join(form.cleaned_data["terms"])
             name = request.POST.get("profile_name", "").strip()[:200] or " · ".join(form.cleaned_data["terms"])[:200]
             settings = dict(name=name, include_terms=form.cleaned_data["terms"], exclude_terms=form.cleaned_data["exclude"],
                 mode=form.cleaned_data["mode"], filters={"form": values, "specification": form.specification()})
@@ -129,7 +136,7 @@ def search_results(request, job_id):
     excluded_terms = job.specification.get("exclude", [])
     if excluded_terms:
         excluded_ids = [identifier for identifier, name, description in hits.values_list("pk", "lot__name", "lot__description").iterator()
-                        if any(matches(f"{name}\n{description}", term, "contains") for term in excluded_terms)]
+                        if any(matches(f"{name}\n{description}", term, "substring") for term in excluded_terms)]
         hits = hits.exclude(pk__in=excluded_ids)
     page = Paginator(hits, 25).get_page(request.GET.get("page"))
     result_context(request, [hit.lot for hit in page])
@@ -138,7 +145,9 @@ def search_results(request, job_id):
     initial = {"terms": "; ".join(spec.get("terms", [])), "exclude": "; ".join(spec.get("exclude", [])),
                "mode": spec.get("mode", "any"), "kind": spec.get("kind", "contains"), "pages": spec.get("pages", 1), "depth": spec.get("depth", 500),
                "customer_bin": spec.get("customer_bin", ""),
-               "only_advance": spec.get("filters", {}).get("only_advance", False)}
+               "only_advance": spec.get("filters", {}).get("only_advance", False),
+               "only_medical": spec.get("filters", {}).get("only_medical", False),
+               "subject": spec.get("filters", {}).get("subject", "")}
     for field, param in [("amount_min", "total_price__gte"), ("amount_max", "total_price__lte"),
                          ("deadline_from", "offer_end_date__gte"), ("deadline_to", "offer_end_date__lte"),
                          ("status", "status_id"), ("method", "purchase_method_id"), ("region", "delivery_address_id__in")]:
@@ -182,6 +191,16 @@ def queue_refresh(lot):
 @login_required
 def lot_detail(request, lot_id):
     lot = get_object_or_404(Lot.objects.select_related("announcement", "customer"), pk=lot_id)
+    back_key = f"lot_return_{lot_id}"
+    back_url = reverse('search')
+    for candidate in (request.GET.get('next'), request.META.get('HTTP_REFERER'), request.session.get(back_key)):
+        if candidate and url_has_allowed_host_and_scheme(candidate, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
+            parts = urlsplit(candidate)
+            if not parts.path.startswith('/') or parts.path.startswith('//') or parts.path == request.path:
+                continue
+            back_url = parts.path + ('?' + parts.query if parts.query else '')
+            request.session[back_key] = back_url
+            break
     if lot.refresh_state == "running" and lot.refresh_started_at and lot.refresh_started_at < timezone.now()-timedelta(minutes=6):
         Lot.objects.filter(pk=lot.pk).update(refresh_state="error", refresh_error="Обновление не завершилось вовремя.")
         lot.refresh_from_db()
@@ -198,7 +217,7 @@ def lot_detail(request, lot_id):
         for doc in Document.objects.filter(announcement=lot.announcement).filter(Q(lot=lot)|Q(lot__isnull=True)).prefetch_related('versions').order_by('name'):
             doc.saved_version = max(doc.versions.all(),key=lambda version:version.pk,default=None)
             documents.append(doc)
-    return render(request, "core/_lot_detail.html" if request.headers.get("HX-Request") else "core/lot_detail.html", {"lot": lot, "documents": documents, "document_batch": batch, "documents_pending": bool(batch and batch.state in {"queued", "running"})})
+    return render(request, "core/_lot_detail.html" if request.headers.get("HX-Request") else "core/lot_detail.html", {"lot": lot, "back_url": back_url, "documents": documents, "document_batch": batch, "documents_pending": bool(batch and batch.state in {"queued", "running"})})
 
 
 @login_required

@@ -65,6 +65,18 @@ class Lot(Timestamped):
     def __str__(self):
         return f"{self.number}: {self.name[:80]}"
 
+    @property
+    def portal_label(self):
+        from tender_search.medical import HOSTS
+        return HOSTS.get(self.announcement.source, 'zakup.gov.kz')
+
+    @property
+    def portal_url(self):
+        from tender_search.medical import HOSTS
+        if self.announcement.source in HOSTS:
+            return f'https://{self.portal_label}/ru/announce/index/{self.announcement.source_id}?tab=lots'
+        return f'https://zakup.gov.kz/announcement/{self.announcement.source_id}#lot-{self.source_id}'
+
 
 class Document(Timestamped):
     announcement = models.ForeignKey(Announcement, on_delete=models.CASCADE, related_name="documents")
@@ -104,6 +116,7 @@ class AnnouncementLotCache(models.Model):
     source_id = models.BigIntegerField(primary_key=True)
     rows = models.JSONField(default=list)
     checked_at = models.DateTimeField(default=timezone.now, db_index=True)
+    registry_fingerprint = models.CharField(max_length=64, blank=True)
 
 
 class SearchProfile(Timestamped):
@@ -200,6 +213,8 @@ class SearchHit(models.Model):
 
 class IndexedLot(models.Model):
     source_id = models.BigIntegerField(primary_key=True)
+    announcement_source_id = models.BigIntegerField(null=True, db_index=True)
+    registry_fingerprint = models.CharField(max_length=64, blank=True)
     row = models.JSONField()
     deadline = models.DateTimeField(db_index=True)
     status_id = models.PositiveIntegerField(db_index=True)
@@ -207,6 +222,7 @@ class IndexedLot(models.Model):
     indexed_at = models.DateTimeField(default=timezone.now)
     seen_cycle = models.CharField(max_length=64, blank=True, db_index=True)
     current = models.BooleanField(default=True, db_index=True)
+    details_skipped = models.BooleanField(default=False, db_index=True)
 
 
 class ProcurementIndex(models.Model):
@@ -223,6 +239,33 @@ class ProcurementIndex(models.Model):
     lease_until = models.DateTimeField(null=True)
     error = models.CharField(max_length=300, blank=True)
     paused = models.BooleanField(default=False)
+
+
+class MedicalIndexedLot(models.Model):
+    source = models.CharField(max_length=40)
+    source_id = models.BigIntegerField()
+    row = models.JSONField()
+    deadline = models.DateTimeField(db_index=True)
+    status_id = models.PositiveIntegerField(db_index=True)
+    method_id = models.PositiveIntegerField(db_index=True, null=True)
+    indexed_at = models.DateTimeField(default=timezone.now)
+    seen_cycle = models.CharField(max_length=64, db_index=True)
+    current = models.BooleanField(default=True, db_index=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['source', 'source_id'], name='unique_medical_index_lot')]
+
+
+class MedicalIndex(models.Model):
+    source = models.CharField(max_length=40, primary_key=True)
+    cycle = models.CharField(max_length=64, blank=True)
+    cursor = models.JSONField(default=dict)
+    completed_at = models.DateTimeField(null=True)
+    heartbeat_at = models.DateTimeField(null=True)
+    next_run_at = models.DateTimeField(null=True)
+    lease = models.CharField(max_length=64, blank=True)
+    lease_until = models.DateTimeField(null=True)
+    error = models.CharField(max_length=300, blank=True)
 
 
 class TelegramSubscription(Timestamped):

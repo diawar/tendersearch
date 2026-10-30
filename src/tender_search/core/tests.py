@@ -97,6 +97,22 @@ class SearchTests(TestCase):
     def job(self, **kwargs):
         return WebSearch.objects.create(owner=self.owner, specification=self.specification(**kwargs))
 
+    def test_lot_back_link_preserves_origin_and_rejects_external_urls(self):
+        self.client.force_login(self.owner)
+        lot = store_lot(sample_lot())
+        Lot.objects.filter(pk=lot.pk).update(refresh_state='done', checked_at=timezone.now())
+        url = f'/lots/{lot.pk}/'
+        for origin in (f'/search/{self.job().pk}/?page=2&view=cards', '/favorites/?sort=-amount&page=3'):
+            response = self.client.get(url, {'next': origin})
+            self.assertEqual(response.context['back_url'], origin)
+            self.assertContains(response, '← Назад')
+            self.assertEqual(self.client.get(url, HTTP_REFERER='http://testserver'+url).context['back_url'], origin)
+        self.client.logout()
+        self.client.force_login(self.owner)
+        for unsafe in ('https://external.example/', 'http://testserver//external.example/'):
+            self.assertEqual(self.client.get(url, {'next':unsafe}).context['back_url'], '/search/')
+        self.assertEqual(self.client.get(url, HTTP_REFERER='http://testserver/favorites/?page=2').context['back_url'], '/favorites/?page=2')
+
     def test_search_deduplicates_and_cannot_be_delivered_twice(self):
         from unittest.mock import Mock
         api = Mock()

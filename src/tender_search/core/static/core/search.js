@@ -1,12 +1,53 @@
 function tagIcon(name){const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.classList.add('icon');svg.setAttribute('aria-hidden','true');const use=document.createElementNS('http://www.w3.org/2000/svg','use');use.setAttribute('href',document.body.dataset.icons+'#'+name);svg.append(use);return svg;}
+// The server supplies elapsed time, avoiding dependence on the browser clock.
+function updateIndexTimer(){
+ const timer=document.querySelector('[data-index-elapsed]');
+ if(!timer)return;
+ if(timer._timerAnchor===undefined)timer._timerAnchor=performance.now();
+ const elapsed=Number(timer.dataset.indexElapsed)+(timer.dataset.running==='true'?Math.floor((performance.now()-timer._timerAnchor)/1000):0);
+ timer.textContent=[Math.floor(elapsed/3600),Math.floor(elapsed/60)%60,elapsed%60].map(n=>String(n).padStart(2,'0')).join(':');
+}
+updateIndexTimer();
+setInterval(updateIndexTimer,1000);
+document.addEventListener('htmx:afterSwap',updateIndexTimer);
+function splitSearchTags(value){
+ return [...new Set(value.split(/[\s;,]+/).map(s=>s.trim().replace(/\s+/g,' ')).filter(Boolean))];
+}
 document.querySelectorAll('[data-tags]').forEach(editor => {
  const source=editor.querySelector('textarea'), list=editor.querySelector('.tag-list'), entry=editor.querySelector('.tag-entry');
- let tags=source.value.split(/[\s;,]+/).map(s=>s.trim()).filter(Boolean); source.hidden=true; source.required=false;
+ const form=editor.closest('form');
+ const parse=value=>splitSearchTags(value);
+ const delimiter=key=>['Enter',';',' ', ','].includes(key);
+ let tags=parse(source.value); source.hidden=true; source.required=false;
  editor.addEventListener('remove-term',event=>{tags=tags.filter(term=>term!==event.detail);render();});
  const sync=()=>{source.value=tags.join('; ');source.dispatchEvent(new Event('change',{bubbles:true}));};
- function render(){ list.replaceChildren(); tags.forEach((text,index)=>{const chip=document.createElement('span');chip.className='tag '+(editor.dataset.tags==='exclude'?'tag-exclusion':'tag-keyword');const label=document.createElement('span');label.textContent=text;const edit=document.createElement('button');edit.type='button';edit.className='tag-edit';edit.append(tagIcon('pencil'));edit.setAttribute('aria-label','Изменить '+text);edit.onclick=()=>{const input=document.createElement('input');input.value=text;input.maxLength=150;input.className='tag-inline';chip.replaceChildren(input);let done=false;const finish=()=>{if(done)return;done=true;const value=input.value.trim();const words=value.split(/[\s;,]+/).filter(Boolean);tags.splice(index,1,...words);tags=[...new Set(tags)];sync();render();};input.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();finish();entry.focus();}if(e.key==='Escape'){done=true;render();}};input.onblur=finish;input.focus();input.select();};const remove=document.createElement('button');remove.type='button';remove.append(tagIcon('x'));remove.setAttribute('aria-label','Удалить '+text);remove.onclick=()=>{tags.splice(index,1);sync();render();};chip.append(label,edit,remove);list.append(chip);});sync();}
- function add(){const values=entry.value.split(/[\s;,]+/).map(s=>s.trim()).filter(Boolean);if(values.some(s=>s.length>150)){entry.setCustomValidity('Слово не должно быть длиннее 150 символов.');entry.reportValidity();return false;}tags=[...new Set([...tags,...values])];entry.value='';entry.setCustomValidity('');render();return true;}
- entry.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===';'||e.key===','||e.key===' '){e.preventDefault();add();}});entry.addEventListener('input',()=>entry.setCustomValidity(''));entry.addEventListener('blur',()=>{if(entry.value.trim())add();});editor.closest('form').addEventListener('submit',e=>{if(!add())e.preventDefault();});render();
+ function render(){
+  list.replaceChildren();
+  tags.forEach((text,index)=>{
+   const chip=document.createElement('span');chip.className='tag '+(editor.dataset.tags==='exclude'?'tag-exclusion':'tag-keyword');
+   const label=document.createElement('span');label.textContent=text;
+   const edit=document.createElement('button');edit.type='button';edit.className='tag-edit';edit.append(tagIcon('pencil'));edit.setAttribute('aria-label','Изменить '+text);
+   edit.onclick=()=>{
+    const input=document.createElement('input');input.value=text;input.maxLength=150;input.className='tag-inline';chip.replaceChildren(input);
+    let done=false;
+    const finish=()=>{if(done)return;done=true;tags.splice(index,1,...parse(input.value));tags=[...new Set(tags)];render();};
+    input.onkeydown=e=>{if(delimiter(e.key)){e.preventDefault();finish();entry.focus();}if(e.key==='Escape'){done=true;render();}};
+    input.onblur=finish;input.focus();input.select();
+   };
+   const remove=document.createElement('button');remove.type='button';remove.append(tagIcon('x'));remove.setAttribute('aria-label','Удалить '+text);
+   remove.onclick=()=>{tags.splice(index,1);render();};chip.append(label,edit,remove);list.append(chip);
+  });sync();
+ }
+ function add(){
+  const values=parse(entry.value);
+  if(values.some(s=>s.length>150)){entry.setCustomValidity('Тег не должен быть длиннее 150 символов.');entry.reportValidity();return false;}
+  tags=[...new Set([...tags,...values])];entry.value='';entry.setCustomValidity('');render();return true;
+ }
+ entry.addEventListener('keydown',e=>{if(delimiter(e.key)){e.preventDefault();add();}});
+ entry.addEventListener('input',()=>entry.setCustomValidity(''));
+ entry.addEventListener('blur',()=>{if(entry.value.trim())add();});
+ form.addEventListener('submit',e=>{if(!add())e.preventDefault();});
+ render();
 });
 document.querySelectorAll('.procurement-group').forEach(group=>{
  const toggle=group.querySelector('[data-group-toggle]'), boxes=[...group.querySelectorAll('.procurement-children input[type="checkbox"]')];
@@ -62,6 +103,12 @@ document.addEventListener('click',event=>{
  const button=event.target.closest('[data-condition-field]');if(!button)return;
  const form=document.querySelector('#procurement-search-form');if(!form)return;
  const field=button.dataset.conditionField,value=button.dataset.conditionValue;
+ if(field==='subject'){
+  const all=form.querySelector('input[name="subject"][value=""]');
+  if(all){all.checked=true;all.dispatchEvent(new Event('change',{bubbles:true}));}
+  const hint=document.querySelector('.conditions-changed');if(hint)hint.hidden=false;
+  return;
+ }
  if(['terms','exclude'].includes(field)){
   form.querySelector('[data-tags="'+field+'"]').dispatchEvent(new CustomEvent('remove-term',{detail:value}));
  }else if(['status','method','region','city'].includes(field)){
@@ -103,13 +150,15 @@ if(conditionsForm&&liveConditions){
    if(removable){const button=document.createElement('button');button.type='button';button.className='remove-filter';button.dataset.conditionField=field;button.dataset.conditionValue=val;if(selectedValues)button.dataset.conditionValues=JSON.stringify(selectedValues);button.setAttribute('aria-label','Убрать условие: '+label);button.append(tagIcon('x'));chip.append(button);}
    liveConditions.append(chip);
   };
-  const words=name=>value(name).split(/[\s;,]+/).filter(Boolean);
+  const words=name=>splitSearchTags(value(name));
   words('terms').forEach(word=>add(word,'terms',word,'condition-keyword'));
   for(const [name,label] of [['amount_min','Сумма от'],['amount_max','Сумма до'],['customer_bin','БИН заказчика']]){if(value(name))add(label+': '+value(name)+(name.startsWith('amount')?' ₸':''),name,value(name),'condition-procurement');}
   for(const [name,label] of [['status','Статус'],['method','Способ закупки'],['region','Область'],['city','Город']]){
    selectedFilterItems(conditionsForm,name).forEach(item=>add(label+': '+item.label,name,item.label,'condition-procurement',true,item.boxes.map(box=>box.value)));
   }
   if(conditionsForm.elements.namedItem('only_advance')?.checked)add('Только с авансом','only_advance','on','condition-procurement');
+  if(conditionsForm.elements.namedItem('only_medical')?.checked)add('Закупки по медицине (med.ecc.kz, fms.ecc.kz)','only_medical','on','condition-procurement');
+  if(value('subject'))add('Предмет закупки: '+({'1':'Товары','2':'Работы','3':'Услуги'}[value('subject')]),'subject',value('subject'),'condition-procurement');
   for(const [name,label] of [['deadline_from','Окончание приёма от'],['deadline_to','Окончание приёма до']]){if(value(name))add(label+': '+value(name).split('-').reverse().join('.'),name,value(name),'condition-procurement');}
   if(value('number'))add((value('number_kind')==='announcement_number'?'Номер объявления: ':'Номер лота: ')+value('number'),'number',value('number'),'condition-procurement');
   words('exclude').forEach(word=>add(word,'exclude',word,'condition-exclude'));
@@ -117,12 +166,12 @@ if(conditionsForm&&liveConditions){
  conditionsForm.addEventListener('input',renderConditions);conditionsForm.addEventListener('change',renderConditions);renderConditions();
 }
 
-function setSearchBusy(busy){
+function setSearchBusy(busy, allowCancel=true){
  document.querySelectorAll('button[type="submit"][name="action"][value="search"], button.conditions-search').forEach(button=>{
   const cancelUrl=document.querySelector('#search-results')?.dataset.cancelUrl;
   if(button.classList.contains('conditions-search')){
    if(!button.dataset.searchMarkup)button.dataset.searchMarkup=button.innerHTML;
-   const cancelling=busy&&Boolean(cancelUrl);
+   const cancelling=busy&&allowCancel&&Boolean(cancelUrl);
    button.value=cancelling?'cancel':'search';button.classList.toggle('cancel-search',cancelling);
    button.title=cancelling?'Отменить поиск':'Запустить поиск';button.setAttribute('aria-label',button.title);
    if(cancelling){button.setAttribute('formaction',cancelUrl);button.setAttribute('formnovalidate','');button.innerHTML='<svg class="icon" aria-hidden="true"><use href="'+document.body.dataset.icons+'#x"></use></svg>';button.disabled=false;return;}
@@ -135,7 +184,9 @@ function setSearchBusy(busy){
  });
 }
 function syncSearchBusy(){setSearchBusy(document.querySelector('#search-results')?.dataset.searchPending==='true');}
-if(conditionsForm){conditionsForm.addEventListener('submit',event=>{if(!event.defaultPrevented&&event.submitter?.value==='search')setSearchBusy(true);});}
+// The browser reads the submitter's formaction after submit listeners finish.
+// Do not redirect a new search to the previous job's cancellation endpoint.
+if(conditionsForm){conditionsForm.addEventListener('submit',event=>{if(!event.defaultPrevented&&event.submitter?.value==='search')setSearchBusy(true,false);});}
 document.addEventListener('htmx:afterSwap',syncSearchBusy);
 window.addEventListener('pageshow',syncSearchBusy);
 syncSearchBusy();

@@ -1,4 +1,5 @@
 import re
+from tender_search.matching import phrase_pattern
 from django import template
 from django.utils.html import format_html_join, format_html
 
@@ -6,13 +7,22 @@ register = template.Library()
 
 
 @register.simple_tag
-def procurement_source_badge(lot):
-    system = (lot.raw or {}).get('system') or {}
-    if not system:
+def procurement_source_badge(lot, all_platforms=False):
+    if lot.announcement.source in ('med_ecc', 'fms_ecc'):
+        return format_html('<span class="source-badge" title="Медицинская площадка">{}</span>', lot.portal_label)
+    raw = lot.raw or {}
+    system = raw.get('system') or {}
+    if not all_platforms and not system:
         system = (lot.announcement.raw or {}).get('system') or {}
-    if isinstance(system, dict) and str(system.get('id')) == '3':
-        return format_html('<span class="source-badge" title="Площадка закупки: Самрук-Казына">{}</span>', 'Самрук-Казына')
-    return ''
+    system_id = str((system.get('id') if isinstance(system, dict) else system) or raw.get('system_id') or '')
+    if not all_platforms and system_id != '3':
+        return ''
+    labels = {'1': 'goszakup.gov.kz', '2': 'Mitwork', '3': 'Самрук-Казына',
+              '4': 'EPZ', '6': 'SK Farm', '7': 'FMS'}
+    label = labels.get(system_id) or (system.get('name') if isinstance(system, dict) else '')
+    title = 'Площадка закупки' if label else 'Источник данных'
+    label = label or 'goszakup.gov.kz'
+    return format_html('<span class="source-badge" title="{}: {}">{}</span>', title, label, label)
 
 
 @register.simple_tag
@@ -31,7 +41,8 @@ def highlight(value, terms):
     terms = [t for t in terms if t]
     if not terms:
         return text
-    pattern = "(" + "|".join(re.escape(t) for t in sorted(terms, key=len, reverse=True)) + ")"
+    pattern = "(" + "|".join(phrase_pattern(t) if len(t.split()) > 1 else r"(?<!\w)" + re.escape(t)
+                             for t in sorted(terms, key=len, reverse=True)) + ")"
     pieces = re.split(pattern, text, flags=re.IGNORECASE)
     return format_html_join("", "{}", ((format_html("<mark>{}</mark>", piece) if index % 2 else piece,) for index, piece in enumerate(pieces)))
 
@@ -47,8 +58,8 @@ def search_conditions(spec):
     from tender_search.core.models import ReferenceEntry
     conditions = list(spec.get("terms", []))
     conditions.append("Любое слово — ИЛИ" if spec.get("mode","any")=="any" else "Все слова — И")
-    names = {"contains":"Содержит текст","word":"Целые слова","phrase":"Точная фраза","field":"Название целиком"}
-    conditions.append(names.get(spec.get("kind","contains"),"Содержит текст"))
+    names = {"contains":"Ключевое слово","word":"Целые слова","phrase":"Фразы","field":"Название целиком"}
+    conditions.append(names.get(spec.get("kind","contains"),"Ключевое слово"))
     filters = spec.get("filters", {})
     for parameter, label in [("total_price__gte", "Сумма от"), ("total_price__lte", "Сумма до")]:
         if filters.get(parameter):

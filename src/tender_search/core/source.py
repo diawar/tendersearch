@@ -20,13 +20,14 @@ class RedisGate:
     return delay
     """
 
-    def __init__(self, redis=None, sleep=time.sleep):
+    def __init__(self, redis=None, sleep=time.sleep, source='zakup'):
+        self.source = source
         self.redis = redis or Redis.from_url(settings.REDIS_URL, socket_timeout=5, socket_connect_timeout=5)
         self.sleep = sleep
 
     def acquire(self):
         try:
-            delay = self.redis.eval(self.SCRIPT, 1, "source:zakup:next-slot")
+            delay = self.redis.eval(self.SCRIPT, 1, f"source:{self.source}:next-slot")
         except RedisError as exc:
             raise SourceError("Общий ограничитель запросов недоступен") from exc
         if delay < 0:
@@ -35,5 +36,16 @@ class RedisGate:
             self.sleep(delay / 1000)
 
 
-def source_client():
+def source_client(source='zakup'):
+    if source != 'zakup':
+        from tender_search.medical import MedicalClient, HOSTS
+        if source not in HOSTS:
+            raise SourceError('Неизвестный источник закупки')
+        return MedicalClient(source, gate=RedisGate(source=source))
     return ZakupClient(gate=RedisGate())
+
+
+def lot_client(lot_id):
+    from .models import Lot
+    source = Lot.objects.select_related('announcement').get(pk=lot_id).announcement.source
+    return source_client(source)

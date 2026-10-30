@@ -16,8 +16,8 @@ def web_search(job_id):
 @shared_task
 def refresh_lot(lot_id):
     from .search_service import refresh_lot_data
-    from .source import source_client
-    with source_client() as api:
+    from .source import lot_client
+    with lot_client(lot_id) as api:
         refresh_lot_data(lot_id, api)
 
 @shared_task(soft_time_limit=1200, time_limit=1230)
@@ -34,8 +34,8 @@ def check_announcement_status(watch_id,lease):
 @shared_task(soft_time_limit=1200, time_limit=1230)
 def download_favorite_documents(lot_id):
     from .document_service import download_documents
-    from .source import source_client
-    with source_client() as api:
+    from .source import lot_client
+    with lot_client(lot_id) as api:
         download_documents(lot_id, api)
 
 

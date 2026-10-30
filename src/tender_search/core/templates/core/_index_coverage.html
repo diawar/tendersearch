@@ -1,7 +1,23 @@
-<div class="panel index-coverage" id="index-coverage" role="status" hx-get="{% url 'index_status' %}" hx-trigger="every 15s" hx-swap="outerHTML">
+{% if user.is_staff %}
+<section class="panel index-coverage platform-coverage" id="index-coverage" aria-label="База активных закупок" hx-get="{% url 'index_status' %}" hx-trigger="every 15s" hx-swap="outerHTML">
 <strong>База активных закупок</strong>
-<span>Загружено {{ index_coverage.loaded }} лотов{% if index_coverage.source_count %} · в последней оценке портала ≈ {{ index_coverage.source_count }}{% endif %}</span>
-{% if index_coverage.missing_details %}<span>Ожидают повторной проверки описаний: {{ index_coverage.missing_details }}. Остальные лоты продолжают загружаться.</span>{% endif %}
-{% if index_coverage.paused %}<span>Загрузка приостановлена.</span>{% elif index_coverage.error %}<span class="error">{{ index_coverage.error }}</span>{% elif not index_coverage.completed_at %}<span>Первоначальная загрузка. Поиск проверяет накопленные данные; пока найдены не все закупки.</span>{% elif not index_coverage.ready %}<span>Данные требуют обновления. Полнота не подтверждена.</span>{% else %}<span>Полный обход списка завершён: {{ index_coverage.completed_date|date:'d.m.Y H:i' }}. Данные обновляются в фоне.</span>{% endif %}
-<small>Все способы · опубликованные закупки с неистёкшим сроком подачи, включая ожидающие начала. Архив и остальные статусы полностью не загружаются. База обновляется круглосуточно.</small>
-</div>
+{% if index_coverage.elapsed_label %}<div class="coverage-timing">{% if index_coverage.building %}Время с начала обхода:{% else %}Последний обход занял:{% endif %} <strong data-index-elapsed="{{ index_coverage.elapsed_seconds }}" data-running="{{ index_coverage.building|yesno:'true,false' }}">{{ index_coverage.elapsed_label }}</strong></div>{% endif %}
+<ul class="platform-status-list">
+{% for platform in platform_statuses %}
+<li class="platform-status platform-status--{{ platform.state }}" data-platform="{{ platform.key }}" title="{{ platform.label }}{% if platform.completed_at %}. Последнее обновление: {{ platform.completed_at|date:'d.m.Y H:i' }} по Алматы{% endif %}">
+{% if platform.state == 'loading' %}<span class="search-spinner platform-spinner" aria-hidden="true"></span>
+{% elif platform.state == 'ready' %}<svg class="icon platform-check" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+{% else %}<svg class="icon platform-warning" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6m0 3h.01"/></svg>{% endif %}
+<span class="platform-name">{{ platform.name }}</span><span class="platform-state-label">{{ platform.label }}</span>
+</li>
+{% endfor %}
+</ul>
+{% if user.is_staff %}<small>Активные закупки с неистёкшим сроком подачи. Обновление круглосуточно.</small>
+<details class="coverage-diagnostics"><summary>Состояние загрузки</summary>
+<div>Загружено {{ index_coverage.loaded }} лотов{% if index_coverage.source_count %} · последняя оценка ≈ {{ index_coverage.source_count }}{% endif %}. Медицинские закупки: {{ medical_coverage.loaded }}.</div>
+{% if index_coverage.skipped %}<div>Исключено лотов с недоступными описаниями: {{ index_coverage.skipped }}.</div>{% endif %}
+{% if index_coverage.error %}<div class="error">{{ index_coverage.error }}</div>{% endif %}
+{% if medical_coverage.error %}<div class="error">{{ medical_coverage.error }}</div>{% endif %}
+</details>{% endif %}
+</section>
+{% endif %}

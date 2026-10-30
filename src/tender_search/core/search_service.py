@@ -13,6 +13,12 @@ logger = logging.getLogger(__name__)
 
 
 def lot_identity(row):
+    source = row.get('_source', 'zakup')
+    system = row.get('system_id') or (row.get('system') or {}).get('id')
+    if source == 'fms_ecc' or (str(system) == '7' and row.get('announcement_external_id')):
+        return ('fms_ecc', str(row['announcement_id'] if source == 'fms_ecc' else row['announcement_external_id']), str(row.get('lot_number')))
+    if source != 'zakup':
+        return (source, row['id'])
     number = str(row.get("lot_number") or "").strip()
     announcement = str(row.get("announcement_number") or "").strip()
     bins = tuple(sorted(str(c.get("bin")) for c in (row.get("customers") or []) if c.get("bin")))
@@ -27,15 +33,23 @@ def store_lot(row):
     if not isinstance(aid, int) or not isinstance(row.get("id"), int):
         raise SchemaError("У лота отсутствуют идентификаторы источника")
     with transaction.atomic():
-        announcement, created = Announcement.objects.get_or_create(source="zakup", source_id=aid,
+        source = row.get('_source', 'zakup')
+        announcement, created = Announcement.objects.get_or_create(source=source, source_id=aid,
             defaults={"name": row.get("announcement_name_ru") or "", "number": row.get("announcement_number") or "",
                       "external_id": row.get("announcement_external_id"), "deadline": utc_datetime(row.get("offer_end_date"))})
         customer = None
         customers = row.get("customers") or []
         if customers:
             c = customers[0]
-            customer, _ = Customer.objects.update_or_create(source="zakup", source_id=c["id"],
+            customer, _ = Customer.objects.update_or_create(source=source, source_id=c["id"],
                 defaults={"bin": c.get("bin") or "", "name": c.get("name_ru") or ""})
+        if source != 'zakup' and row.get('_announcement'):
+            card = row['_announcement']
+            announcement.name = card['name_ru']
+            announcement.raw = card
+            announcement.status = card['status']['name']
+            announcement.deadline = utc_datetime(card.get('offer_end_date'))
+            announcement.save()
         defaults = {
             "external_id": row.get("external_id"), "number": row.get("lot_number") or "",
             "name": row.get("name_ru") or row.get("name") or "Без названия",
@@ -68,7 +82,9 @@ def extended_description(row, detail=None):
     parts = [row.get('description_ru'), row.get('description_kk'), detail.get('description_ru'), detail.get('description_kk'), detail.get('description')]
     for plan in detail.get('plan_items') or []:
         if isinstance(plan, dict):
-            parts.extend(plan.get(key) for key in ('extra_description_ru', 'extra_description_kk', 'extra_description'))
+            parts.extend(plan.get(key) for key in ('name_ru', 'name_kk', 'name',
+                'description_ru', 'description_kk', 'description',
+                'extra_description_ru', 'extra_description_kk', 'extra_description'))
     return '\n'.join(dict.fromkeys(value.strip() for value in parts if isinstance(value, str) and value.strip()))
 
 
@@ -81,7 +97,8 @@ def announcement_details(api, announcement_id, local_cache, expected_id, max_age
             rows = api.announcement_lots(announcement_id)
             if not isinstance(rows, list):
                 raise SchemaError('Изменился формат расширенных описаний лотов.')
-            AnnouncementLotCache.objects.update_or_create(source_id=announcement_id,defaults={'rows':rows,'checked_at':timezone.now()})
+            AnnouncementLotCache.objects.update_or_create(source_id=announcement_id,defaults={
+                'rows': rows, 'checked_at': timezone.now(), 'registry_fingerprint': ''})
         local_cache[announcement_id] = {item['id']:item for item in rows if isinstance(item, dict) and isinstance(item.get('id'), int)}
     return local_cache[announcement_id]
 
@@ -94,6 +111,7 @@ def execute_search(job_id, api):
     try:
         search_time = timezone.now()
         filters = runtime_status_filters(specification.get("filters", {}), specification.get("status_selection", []), search_time)
+        subject = filters.pop('subject', '')
         if specification.get("customer_bin"):
             customers = resolve_customer(api, specification["customer_bin"])
             filters["customer_id" if len(customers) == 1 else "customer_id__in"] = "__".join(map(str, customers))
@@ -112,6 +130,8 @@ def execute_search(job_id, api):
                         continue
                     seen.add(row["id"])
                     if not status_matches(row,specification.get("status_selection", []),search_time): continue
+                    from .subjects import subject_matches
+                    if not subject_matches(row, subject): continue
                     if expanded:
                         if not WebSearch.objects.filter(pk=job.pk,status="running").exists(): return
                         details = announcement_details(api, row['announcement_id'], details_cache, row['id'])

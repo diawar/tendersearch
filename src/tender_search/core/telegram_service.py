@@ -85,6 +85,8 @@ class WorkHoursGate:
 def announcement_key(lot):
     a = lot.announcement
     identity = f'{lot.raw.get("system_id", "zakup")}:{a.number}' if a.number else f'zakup:{a.source_id}'
+    if a.source == 'fms_ecc': identity = f'7:{a.number}'
+    elif a.source != 'zakup': identity = f'{a.source}:{a.source_id}'
     return sha256(identity.encode()).hexdigest()
 
 def schedule_profiles():
@@ -178,8 +180,8 @@ def message_for(delivery):
             f'⏳ Приём до: <b>{deadline}</b> (Алматы)\n'
             f'{telegram_remaining_time(lot.announcement.deadline)}'
             f'\nПроверьте актуальные условия на портале.')
-    url = f'https://zakup.gov.kz/announcement/{lot.announcement.source_id}#lot-{lot.source_id}'
-    return {'text':body,'parse_mode':'HTML','link_preview_options':{'is_disabled':True},'reply_markup':{'inline_keyboard':[[{'text':'Открыть на госзакупе ↗','url':url}]]}}
+    url = lot.portal_url
+    return {'text':body,'parse_mode':'HTML','link_preview_options':{'is_disabled':True},'reply_markup':{'inline_keyboard':[[{'text':('Открыть на госзакупе ↗' if lot.announcement.source == 'zakup' else f'Открыть на {lot.portal_label} ↗'),'url':url}]]}}
 
 def deliver_pending():
     if not settings.TELEGRAM_BOT_TOKEN or not in_work_hours(): return

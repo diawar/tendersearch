@@ -1,4 +1,4 @@
 {% extends 'core/base.html' %}
-{% block content %}<h1>Здравствуйте, {{ user.username }}</h1><p class="muted">Сервис для подбора закупок и поиска требований в документации.</p>
+{% block content %}<h1>Здравствуйте, {{ user.username }}</h1>
 <div class="stats dashboard-stats"><section class="panel"><strong>{{ profiles }} <span class="stat-divider">/</span> {{ tracked }}</strong><span>Подборки</span><small class="stat-legend">Всего / отслеживается</small></section><section class="panel"><strong>{{ favorites }} <span class="stat-divider">/</span> {{ favorites_tracked }}</strong><span>Избранное</span><small class="stat-legend">Всего / отслеживается</small></section></div>
 <section class="panel"><h2>Рабочее пространство готово</h2><p>Найдите закупки по ключевым словам, проверьте условия и сохраните подходящие лоты.</p><a class="button" href="{% url 'search' %}">Найти закупки</a> <a class="secondary button" href="{% url 'favorites' %}">Избранное</a></section>{% endblock %}
