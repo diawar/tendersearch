@@ -95,4 +95,4 @@ LOGGING = {"version": 1, "disable_existing_loggers": False,
            "root": {"handlers": ["console"], "level": "INFO"}}
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "tender_over_bot").lstrip("@")
+TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "").lstrip("@")

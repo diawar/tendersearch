@@ -286,7 +286,7 @@ def notification_settings(request):
     sub = TelegramSubscription.objects.filter(owner=request.user).first()
     link = None
     if request.method == "POST":
-        if request.POST.get("action") == "connect" and settings.TELEGRAM_BOT_TOKEN:
+        if request.POST.get("action") == "connect" and settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_BOT_USERNAME:
             link = connection_link(request.user)
             sub = TelegramSubscription.objects.get(owner=request.user)
         elif request.POST.get("action") == "disconnect":
@@ -296,7 +296,7 @@ def notification_settings(request):
             AnnouncementWatch.objects.filter(owner=request.user).update(enabled=False,lease="",lease_until=None)
             TelegramDelivery.objects.filter(owner=request.user,state="pending").update(state="cancelled")
             return redirect("notification_settings")
-    context = {"subscription":sub,"telegram_ready":bool(settings.TELEGRAM_BOT_TOKEN),"connect_link":link}
+    context = {"subscription":sub,"telegram_ready":bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_BOT_USERNAME),"telegram_bot_username":settings.TELEGRAM_BOT_USERNAME,"connect_link":link}
     template = "core/_telegram_status.html" if request.headers.get("HX-Request") else "core/settings.html"
     return render(request,template,context)
 

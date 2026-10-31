@@ -1,7 +1,7 @@
-name: tender-search
+name: tendersearch
 
 x-app: &app
-  image: tender-search:local
+  image: tendersearch:local
   pull_policy: never
   environment: &environment
     DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Run scripts/setup_local.py first}
@@ -10,7 +10,7 @@ x-app: &app
     DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
     REDIS_URL: redis://redis:6379/0
     TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-    TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-tender_over_bot}
+    TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
   volumes:
     - documents:/app/data
   init: true

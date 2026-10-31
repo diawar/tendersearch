@@ -1,8 +1,8 @@
 from django.contrib import admin
 from . import models
 
-admin.site.site_header = "GoszakupOver — администрирование"
-admin.site.site_title = "GoszakupOver"
+admin.site.site_header = "TenderSearch — администрирование"
+admin.site.site_title = "TenderSearch"
 admin.site.index_title = "Администрирование"
 
 @admin.register(models.Announcement)

@@ -2,7 +2,7 @@
 # The original localhost service and its cookies are unchanged.
 services:
   tunnel-web:
-    image: tender-search:local
+    image: tendersearch:local
     pull_policy: never
     command: [gunicorn, tender_search.web.wsgi:application, --bind, "0.0.0.0:8000", --workers, "1", --threads, "2", --timeout, "60", --forwarded-allow-ips, "*", --access-logfile, "-"]
     environment:
@@ -14,7 +14,7 @@ services:
       HTTPS_ENABLED: "1"
       REDIS_URL: redis://redis:6379/0
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-tender_over_bot}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
     volumes:
       - documents:/app/data
     depends_on:

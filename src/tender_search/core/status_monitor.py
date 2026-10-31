@@ -20,7 +20,7 @@ def cancel_watch(owner_id, announcement_id):
                 payload=status_payload(watch)
                 title=escape(str(watch.announcement.name or watch.lot.name)[:700])
                 number=escape(str(watch.announcement.number or watch.lot.number)[:100])
-                payload['text']=f'🔕 <b>Слежение отключено</b>\n<code>{number}</code>\n\n<b>{title}</b>\n\nУведомления об изменении статуса этого объявления отключены. Включить слежение снова можно кнопкой ✈️ в GoszakupOver.'
+                payload['text']=f'🔕 <b>Слежение отключено</b>\n<code>{number}</code>\n\n<b>{title}</b>\n\nУведомления об изменении статуса этого объявления отключены. Включить слежение снова можно кнопкой ✈️ в TenderSearch.'
                 StatusDelivery.objects.get_or_create(event_key=f'{watch.pk}:{watch.generation}:stop',defaults={'watch':watch,'generation':watch.generation,'payload':payload})
             watch.enabled=False;watch.lease='';watch.lease_until=None
             watch.save(update_fields=['enabled','lease','lease_until','updated_at'])
