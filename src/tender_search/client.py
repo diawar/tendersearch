@@ -29,6 +29,10 @@ class AccessDenied(SourceError):
     pass
 
 
+class NotFound(SourceError):
+    """The requested source resource is unavailable (HTTP 404)."""
+
+
 class SchemaError(SourceError):
     pass
 
@@ -147,6 +151,8 @@ class ZakupClient:
                 continue
             if response.status_code in (401, 403):
                 raise AccessDenied(f"Источник ограничил доступ: HTTP {response.status_code}")
+            if response.status_code == 404:
+                raise NotFound("Ошибка источника: HTTP 404")
             if response.status_code == 429 or response.status_code >= 500:
                 if attempt + 1 == self.attempts:
                     raise SourceError(f"Источник недоступен: HTTP {response.status_code}")

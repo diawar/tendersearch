@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from tender_search.client import (
-    AccessDenied, Document, SchemaError, SourceError, ZakupClient, utc_datetime,
+    AccessDenied, Document, NotFound, SchemaError, SourceError, ZakupClient, utc_datetime,
 )
 
 
@@ -14,6 +14,12 @@ def client(handler, **kwargs):
 
 def page(items=None, next_url=None):
     return {"count": 2, "results": items or [], "next": next_url}
+
+
+def test_404_is_distinct_from_an_empty_lot_list():
+    with client(lambda _: httpx.Response(404)) as api:
+        with pytest.raises(NotFound):
+            api.announcement_lots(100)
 
 
 def test_pagination_preserves_source_query_and_does_not_overfetch():

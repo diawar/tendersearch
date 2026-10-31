@@ -17,6 +17,22 @@ from tender_search.core.templatetags.search_tags import highlight
     ("aaaab", "a+b", "contains", False),
     ("Счётчик", "счетчик", "contains", False),
     ("ВВГ–нг", "ВВГ-нг", "contains", False),
+    ("Мышь", "мыш", "contains", True),
+    ("Проводная МЫШКА", "мыш", "contains", True),
+    ("USB-мышь, (мышки)", "мыш", "contains", True),
+    ("промышленный", "мыш", "contains", False),
+    ("внутримышечный", "мыш", "contains", False),
+    ("Момышулы Момышұлы", "мыш", "contains", False),
+    ("компьютернаямышь", "мыш", "contains", False),
+    ("123мышь _мышь", "мыш", "contains", False),
+    ("клавиатуры", "клавиатур", "contains", True),
+    ("Беспроводную мышь", "беспроводн мыш", "phrase", True),
+    ("Новая БЕСПРОВОДНАЯ МЫШКА USB", "беспроводн мыш", "phrase", True),
+    ("Беспроводной комплект клавиатура и мышь", "беспроводн мыш", "phrase", False),
+    ("Мышь беспроводная", "беспроводн мыш", "phrase", False),
+    ("Сверхбеспроводная мышь", "беспроводн мыш", "phrase", False),
+    ("Беспроводной промышленный", "беспроводн мыш", "phrase", False),
+    ("Беспроводная мышка", "беспроводная мышь", "phrase", False),
 ])
 def test_matching_semantics(text, term, kind, expected):
     assert matches(text, term, kind) is expected
@@ -55,3 +71,26 @@ def test_exclusions_match_word_parts(name, description):
 
 def test_exclusion_does_not_hide_unrelated_lot():
     assert match_lot("Разработка сайта", "Создание страниц", {"terms":["сайт"],"exclude":["услуг","ремонт"]}) == ["сайт"]
+
+
+def test_prefix_applies_in_both_fields_and_and_or_modes():
+    spec = {'terms': ['мыш', 'клавиатур'], 'kind': 'contains', 'mode': 'any'}
+    assert match_lot('Промышленный компьютер', 'Адрес: Момышулы', spec) == []
+    assert match_lot('Клавиатура', 'Адрес: Момышулы', spec) == ['клавиатур']
+    spec['mode'] = 'all'
+    assert match_lot('Клавиатура', 'Адрес: Момышулы', spec) == []
+    assert match_lot('Клавиатура', 'В комплекте мышка', spec) == ['мыш', 'клавиатур']
+
+
+def test_exclusions_keep_substring_semantics():
+    assert match_lot('Мышь', 'Промышленная', {'terms': ['мыш'], 'exclude': ['мышл']}) == []
+
+
+def test_highlight_does_not_mark_inside_words():
+    assert str(highlight('Мышка промышленная Момышулы', ['мыш'])) == '<mark>Мыш</mark>ка промышленная Момышулы'
+
+
+def test_highlight_phrase_prefixes_only_when_adjacent():
+    assert str(highlight('Беспроводную мышь', ['беспроводн мыш'])) == '<mark>Беспроводную мышь</mark>'
+    text = 'Беспроводной комплект клавиатура и мышь'
+    assert str(highlight(text, ['беспроводн мыш'])) == text

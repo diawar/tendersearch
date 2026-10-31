@@ -8,7 +8,7 @@ from django.utils import timezone
 from tender_search.client import ZakupClient, SourceError
 from .models import AnnouncementWatch, StatusDelivery, TelegramSubscription, Favorite, Announcement
 from .telegram_service import ALMATY, in_work_hours, telegram_api, TelegramError
-from .source import RedisGate
+from .source import RedisGate, source_client
 
 
 def cancel_watch(owner_id, announcement_id):
@@ -45,8 +45,8 @@ def status_payload(watch, old_name=None):
         body=f'👁 <b>Слежение включено</b>\n<code>{number}</code>\n\n<b>{title}</b>\n\n📍 Текущий статус: <b>{esc(watch.last_status_name,300)}</b>\n\nБудем проверять статус ежедневно. Сообщим только об изменениях.'
     else:
         body=f'🔄 <b>Изменился статус объявления</b>\n<code>{number}</code>\n\n<b>{title}</b>\n\nБыло: {esc(old_name,300)}\nСтало: <b>{esc(watch.last_status_name,300)}</b>\n\n🕒 {timezone.now().astimezone(ALMATY).strftime("%d.%m.%Y %H:%M")} · Алматы'
-    url=f'https://zakup.gov.kz/announcement/{a.source_id}#lot-{lot.source_id}'
-    return {'text':body,'parse_mode':'HTML','link_preview_options':{'is_disabled':True},'reply_markup':{'inline_keyboard':[[{'text':'Открыть на госзакупе ↗','url':url}]]}}
+    url=lot.portal_url
+    return {'text':body,'parse_mode':'HTML','link_preview_options':{'is_disabled':True},'reply_markup':{'inline_keyboard':[[{'text':('Открыть на госзакупе ↗' if lot.announcement.source == 'zakup' else f'Открыть на {lot.portal_label} ↗'),'url':url}]]}}
 
 
 def schedule_status_checks():
@@ -72,7 +72,7 @@ def check_status(watch_id, lease):
             cancel_watch(watch.owner_id,watch.announcement_id);return
         if not TelegramSubscription.objects.filter(owner=watch.owner,enabled=True,chat_id__isnull=False).exists():return
         # Use only an authoritative announcement card, never the lot's list status.
-        with ZakupClient(gate=RedisGate()) as api:card=api.announcement(watch.announcement.source_id)
+        with (ZakupClient(gate=RedisGate()) if watch.announcement.source == 'zakup' else source_client(watch.announcement.source)) as api:card=api.announcement(watch.announcement.source_id)
         identity,name=status_value(card)
         with transaction.atomic():
             current=AnnouncementWatch.objects.select_for_update().select_related('announcement','lot').get(pk=watch_id)

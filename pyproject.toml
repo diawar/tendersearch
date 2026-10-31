@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Read-only client for public zakup.gov.kz procurement data"
 requires-python = ">=3.11"
 dependencies = [
+    "beautifulsoup4>=4.12,<5",
     "httpx>=0.28,<0.29",
     "Django>=5.2,<5.3",
     "psycopg[binary]>=3.2,<4",
@@ -26,6 +27,7 @@ tender-search = "tender_search.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
+"tender_search" = ["certs/*.crt"]
 "tender_search.core" = ["templates/**/*.html", "static/core/*", "fixtures/*.json"]
 
 [tool.pytest.ini_options]

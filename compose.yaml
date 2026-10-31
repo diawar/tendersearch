@@ -106,6 +106,17 @@ services:
     restart: unless-stopped
     mem_limit: 384m
 
+  medical-indexer:
+    <<: *app
+    command: [python, manage.py, index_medical]
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 384m
+
   telegram:
     <<: *app
     command: [python, manage.py, telegram_monitor]

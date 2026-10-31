@@ -9,7 +9,7 @@ from .procurement_groups import grouped_choices
 def split_terms(value):
     terms = list(dict.fromkeys(t.strip() for t in re.split(r"[\s;,]+", value or "") if t.strip()))
     if any(len(t) > 150 for t in terms):
-        raise forms.ValidationError("Слово не должно быть длиннее 150 символов.")
+        raise forms.ValidationError("Тег не должен быть длиннее 150 символов.")
     return terms
 
 
@@ -18,14 +18,17 @@ class SearchForm(forms.Form):
                             widget=forms.Textarea(attrs={"rows": 2, "placeholder": "телефон\nсмартфон"}),
                             help_text="Один тег — одно слово. Количество тегов не ограничено.")
     mode = forms.ChoiceField(label="Объединение условий", initial="any", choices=[("any", "Любое условие — ИЛИ"), ("all", "Все условия — И")])
-    kind = forms.ChoiceField(label="Совпадение", choices=[("contains", "Содержит текст"), ("word", "Целые слова"),
-                               ("phrase", "Точная фраза"), ("field", "Название целиком")])
+    kind = forms.ChoiceField(label="Совпадение", choices=[("contains", "Ключевое слово")],
+                             initial="contains", disabled=True)
     exclude = forms.CharField(label="Исключить слова", required=False,
                               widget=forms.Textarea(attrs={"rows": 2, "placeholder": "ремонт; монтаж"}),
                               help_text="Исключаем вхождения текста в названии и описании: услуг → услуги, ремонт → ремонта.")
     amount_min = forms.DecimalField(label="Сумма от, ₸", required=False, min_value=0, max_digits=18, decimal_places=2)
     amount_max = forms.DecimalField(label="Сумма до, ₸", required=False, min_value=0, max_digits=18, decimal_places=2)
     only_advance = forms.BooleanField(label="Только с авансом", required=False, initial=False)
+    only_medical = forms.BooleanField(label="Закупки по медицине (med.ecc.kz, fms.ecc.kz)", required=False, initial=False)
+    subject = forms.ChoiceField(label="Предмет закупки", required=False, initial="",
+        choices=[("", "Все"), ("1", "Товары"), ("2", "Работы"), ("3", "Услуги")], widget=forms.RadioSelect)
     deadline_from = forms.DateField(label="Приём заявок до — начиная с", required=False, widget=forms.DateInput(attrs={"type": "date"}))
     deadline_to = forms.DateField(label="Приём заявок до — по", required=False, widget=forms.DateInput(attrs={"type": "date"}))
     status = forms.MultipleChoiceField(label="Статус лота", required=False, widget=forms.CheckboxSelectMultiple)
@@ -40,6 +43,7 @@ class SearchForm(forms.Form):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.initial["kind"] = "contains"
         self.procurement_options = {}
         for field, kind in [("status", "lot-statuses"), ("method", "purchase-methods")]:
             rows = list(ReferenceEntry.objects.filter(kind=kind))
@@ -103,6 +107,10 @@ class SearchForm(forms.Form):
             filters[data["number_kind"]] = data["number"].strip()
         if data.get("only_advance"):
             filters["only_advance"] = True
+        if data.get("only_medical"):
+            filters["only_medical"] = True
+        if data.get("subject"):
+            filters["subject"] = data["subject"]
         return {"terms": data["terms"], "exclude": data["exclude"], "kind": data["kind"],
                 "mode": data["mode"], "backend": "local_index", "pages": 10, "auto_pages": False, "extended_descriptions": True, "filters": filters,
                 "customer_bin": data.get("customer_bin", ""), "regions": regions, "cities": cities, "defaults_version": 1, "status_selection": data.get("status", [])}
