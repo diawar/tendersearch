@@ -23,8 +23,8 @@ def require_staff(request):
 
 def collection_context():
     state, _ = LeadCollectionState.objects.get_or_create(pk=1)
-    companies = LeadCompany.objects.exclude(status='excluded').aggregate(total=Count('pk', distinct=True),
-        with_email=Count('pk', filter=Q(emails__current=True), distinct=True))
+    companies = LeadCompany.objects.filter(emails__current=True).exclude(status='excluded').aggregate(
+        with_email=Count('pk', distinct=True))
     emails = LeadEmail.objects.filter(current=True).exclude(company__status='excluded').annotate(
         email_key=Lower('email')).values('email_key').distinct().count()
     return {'collection': state, 'lead_totals': companies, 'email_count': emails,
@@ -32,7 +32,7 @@ def collection_context():
 
 
 def filtered_companies(request):
-    companies = LeadCompany.objects.all()
+    companies = LeadCompany.objects.filter(emails__current=True).distinct()
     query = request.GET.get('q', '').strip()[:200]
     if query:
         companies = companies.filter(Q(name__icontains=query) | Q(identifier__icontains=query) |
@@ -42,11 +42,6 @@ def filtered_companies(request):
         companies = companies.filter(status=status)
     else:
         companies = companies.exclude(status='excluded')
-    contact = request.GET.get('contact', 'ready')
-    if contact == 'ready':
-        companies = companies.filter(emails__current=True).distinct()
-    elif contact in {'pending', 'missing', 'error'}:
-        companies = companies.filter(contact_state=contact)
     return companies.order_by('-created_at', '-pk'), query
 
 
@@ -65,10 +60,10 @@ def leads(request):
     page = Paginator(companies, 25).get_page(request.GET.get('page'))
     params = request.GET.copy()
     params.pop('page', None)
+    params.pop('contact', None)
     context = collection_context()
     context.update(page=page, query=query, status_choices=LeadCompany.STATUS_CHOICES,
-        contact_choices=[('ready', 'С e-mail'), ('', 'Все компании')], page_query=params.urlencode(),
-        selected_contact=request.GET.get('contact', 'ready'))
+        page_query=params.urlencode())
     return render(request, 'core/leads.html', context)
 
 

@@ -1,6 +1,6 @@
 <section id="lead-collection-status" class="panel lead-collection-status" hx-get="{% url 'lead_collection_status' %}" hx-trigger="every 15s" hx-swap="outerHTML">
   <div class="lead-status-heading"><strong>{% if collection.enabled %}База e-mail пополняется фоном{% else %}Пополнение базы приостановлено{% endif %}</strong><span class="muted">Опубликованные контакты компаний · госзакупки за {{ collection.lookback_days }} дней</span></div>
-  <div class="lead-metrics"><div><strong>{{ lead_totals.with_email }}</strong><span>компаний с e-mail</span></div><div><strong>{{ email_count }}</strong><span>уникальных адресов e-mail</span></div><div><strong>{{ lead_totals.total }}</strong><span>компаний в базе</span></div></div>
+  <div class="lead-metrics"><div><strong>{{ lead_totals.with_email }}</strong><span>компаний с e-mail</span></div><div><strong>{{ email_count }}</strong><span>уникальных адресов e-mail</span></div></div>
   {% if collection.heartbeat_at %}<p class="muted">Обновлено: {{ collection.heartbeat_at|date:'d.m.Y H:i' }}{% if collection.enabled and not collector_recent %} · Ожидается возобновление сбора{% endif %}.</p>{% endif %}
   {% if collection.error %}<p class="notice" role="status">Источник временно недоступен. Сбор повторится автоматически.</p>{% endif %}
 </section>
