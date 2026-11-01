@@ -7,12 +7,13 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import Count, Prefetch, Q
+from django.db.models.functions import Lower
 from django.http import StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 
 from .lead_service import set_collection_enabled
-from .models import LeadCollectionState, LeadCompany, LeadEmail, LeadProcurement
+from .models import LeadCollectionState, LeadCompany, LeadEmail
 
 
 def require_staff(request):
@@ -22,16 +23,16 @@ def require_staff(request):
 
 def collection_context():
     state, _ = LeadCollectionState.objects.get_or_create(pk=1)
-    companies = LeadCompany.objects.aggregate(total=Count('pk', distinct=True),
+    companies = LeadCompany.objects.exclude(status='excluded').aggregate(total=Count('pk', distinct=True),
         with_email=Count('pk', filter=Q(emails__current=True), distinct=True))
-    sources = {row['state']: row['count'] for row in LeadProcurement.objects.values('state').annotate(count=Count('pk'))}
-    return {'collection': state, 'lead_totals': companies, 'source_totals': sources,
-            'source_count': sum(sources.values()), 'windows_left': len(state.windows),
+    emails = LeadEmail.objects.filter(current=True).exclude(company__status='excluded').annotate(
+        email_key=Lower('email')).values('email_key').distinct().count()
+    return {'collection': state, 'lead_totals': companies, 'email_count': emails,
             'collector_recent': bool(state.heartbeat_at and state.heartbeat_at >= timezone.now()-timedelta(minutes=3))}
 
 
 def filtered_companies(request):
-    companies = LeadCompany.objects.annotate(participation_count=Count('participations', distinct=True))
+    companies = LeadCompany.objects.all()
     query = request.GET.get('q', '').strip()[:200]
     if query:
         companies = companies.filter(Q(name__icontains=query) | Q(identifier__icontains=query) |
@@ -39,8 +40,12 @@ def filtered_companies(request):
     status = request.GET.get('status', '')
     if status in dict(LeadCompany.STATUS_CHOICES):
         companies = companies.filter(status=status)
-    contact = request.GET.get('contact', '')
-    if contact in {'pending', 'ready', 'missing', 'error'}:
+    else:
+        companies = companies.exclude(status='excluded')
+    contact = request.GET.get('contact', 'ready')
+    if contact == 'ready':
+        companies = companies.filter(emails__current=True).distinct()
+    elif contact in {'pending', 'missing', 'error'}:
         companies = companies.filter(contact_state=contact)
     return companies.order_by('-created_at', '-pk'), query
 
@@ -53,12 +58,6 @@ def leads(request):
         if action in {'start', 'pause'}:
             set_collection_enabled(action == 'start')
             messages.success(request, 'Фоновый сбор включён.' if action == 'start' else 'Фоновый сбор приостановлен.')
-        elif action == 'retry':
-            identifier = request.POST.get('procurement_id', '')
-            if identifier.isdigit():
-                LeadProcurement.objects.filter(pk=identifier, state__in=['retry', 'review']).update(
-                    state='queued', next_attempt_at=timezone.now(), error='', updated_at=timezone.now())
-                messages.success(request, 'Протокол поставлен в очередь повторной проверки.')
         return redirect('administration_leads')
     companies, query = filtered_companies(request)
     companies = companies.prefetch_related(Prefetch('emails', queryset=LeadEmail.objects.filter(current=True).order_by(
@@ -68,8 +67,8 @@ def leads(request):
     params.pop('page', None)
     context = collection_context()
     context.update(page=page, query=query, status_choices=LeadCompany.STATUS_CHOICES,
-        contact_choices=LeadCompany._meta.get_field('contact_state').choices, page_query=params.urlencode(),
-        issues=LeadProcurement.objects.filter(state__in=['retry', 'review']).order_by('-updated_at')[:10])
+        contact_choices=[('ready', 'С e-mail'), ('', 'Все компании')], page_query=params.urlencode(),
+        selected_contact=request.GET.get('contact', 'ready'))
     return render(request, 'core/leads.html', context)
 
 
@@ -131,11 +130,15 @@ def export_leads(request):
     writer = csv.writer(Echo(), delimiter=';')
 
     def rows():
-        yield '\ufeff'+writer.writerow(['Компания', 'БИН/ИИН', 'E-mail', 'Состояние', 'Источник', 'Проверено'])
+        yield '\ufeff'+writer.writerow(['Компания', 'E-mail'])
+        seen = set()
         for company in companies.iterator(chunk_size=200):
             for contact in company.active_emails:
-                yield writer.writerow([csv_cell(company.name), "'"+company.identifier, csv_cell(contact.email),
-                    company.get_status_display(), contact.source_url, contact.verified_at.isoformat()])
+                key = contact.email.casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                yield writer.writerow([csv_cell(company.name), csv_cell(contact.email)])
     response = StreamingHttpResponse(rows(), content_type='text/csv; charset=utf-8')
     response['Content-Disposition'] = 'attachment; filename="tendersearch-clients.csv"'
     return response

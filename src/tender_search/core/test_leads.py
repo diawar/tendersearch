@@ -1,4 +1,6 @@
 from datetime import timedelta
+import csv
+from io import StringIO
 from unittest.mock import Mock, patch
 
 from django.contrib.auth import get_user_model
@@ -258,7 +260,7 @@ class LeadAdministrationTests(TestCase):
     def test_staff_page_and_controls_do_not_make_source_requests(self):
         self.client.force_login(self.staff)
         with patch('tender_search.core.source.source_client', side_effect=AssertionError('No HTTP from UI')):
-            self.assertContains(self.client.get(self.url), 'Потенциальные клиенты')
+            self.assertContains(self.client.get(self.url), 'База e-mail компаний')
             self.client.post(self.url, {'action': 'start'})
             self.assertTrue(LeadCollectionState.objects.get(pk=1).enabled)
             self.client.get(self.url)
@@ -288,3 +290,33 @@ class LeadAdministrationTests(TestCase):
         self.assertIn("'=HYPERLINK", body)
         self.assertNotIn('excluded@example.com', body)
         self.assertNotIn('historical@example.com', body)
+
+    def test_default_list_focuses_on_email_database_and_hides_protocol_diagnostics(self):
+        LeadEmail.objects.create(company=self.company, email='sales@example.com', source_url='https://example.com')
+        pending = LeadCompany.objects.create(identifier='111111111111', name='No email')
+        excluded = LeadCompany.objects.create(identifier='222222222222', name='Do not contact', status='excluded')
+        LeadEmail.objects.create(company=excluded, email='blocked@example.com', source_url='https://example.com')
+        LeadProcurement.objects.create(source_id=99, external_id=99, number='99-1', name='Source',
+            results_published_at=timezone.now(), state='review', error='Internal protocol diagnosis')
+        self.client.force_login(self.staff)
+        response = self.client.get(self.url)
+        self.assertEqual(list(response.context['page']), [self.company])
+        self.assertContains(response, 'value="ready" selected')
+        self.assertNotContains(response, 'Протоколы, требующие внимания')
+        self.assertNotContains(response, 'Internal protocol diagnosis')
+        self.assertNotContains(response, 'протоколов обработано')
+        response = self.client.get(self.url, {'contact': ''})
+        self.assertEqual({item.pk for item in response.context['page']}, {self.company.pk, pending.pk})
+        response = self.client.get(self.url, {'status': 'excluded'})
+        self.assertEqual(list(response.context['page']), [excluded])
+
+    def test_csv_has_company_email_columns_and_no_repeated_addresses(self):
+        LeadEmail.objects.create(company=self.company, email='sales@example.com', source_url='https://example.com')
+        alias = LeadCompany.objects.create(identifier='333333333333', name='Company alias')
+        LeadEmail.objects.create(company=alias, email='SALES@example.com', source_url='https://example.com')
+        self.client.force_login(self.staff)
+        response = self.client.get('/administration/clients/export/')
+        rows = list(csv.reader(StringIO(b''.join(response.streaming_content).decode('utf-8-sig')), delimiter=';'))
+        self.assertEqual(rows[0], ['Компания', 'E-mail'])
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1][1].casefold(), 'sales@example.com')
