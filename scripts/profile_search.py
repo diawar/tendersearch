@@ -5,8 +5,10 @@ Run inside the application container:
 No source HTTP requests or Telegram tasks are dispatched.
 """
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
+from datetime import datetime
 import json
+import hashlib
 import os
 from pathlib import Path
 from time import perf_counter
@@ -17,6 +19,8 @@ import django
 django.setup()
 
 from django.db import connection, transaction
+from django.test import override_settings
+from django.utils import timezone
 from django.db.models.query import QuerySet
 from tender_search.core import index_service
 from tender_search.core.models import IndexedLot, MedicalIndexedLot, SearchHit, WebSearch
@@ -58,7 +62,6 @@ def probe(original):
     iterator = QuerySet.iterator
     hit_manager = SearchHit.objects
     batch_store = getattr(index_service, 'store_search_hits', None)
-    from contextlib import ExitStack
 
     def timed_iterator(queryset, *args, **kwargs):
         stream = iterator(queryset, *args, **kwargs)
@@ -90,10 +93,13 @@ def probe(original):
         job.refresh_from_db()
         result = {'elapsed_seconds': elapsed, 'status': job.status, 'scanned': job.scanned,
                   'hits': job.hits.count(), 'error': job.error,
+                  'query': job.source_counts.get('__query__', {}),
                   'stages_seconds': measurements.stages, 'sql': measurements.sql}
         result['stages_seconds']['other'] = max(0, elapsed-sum(measurements.stages.values()))
         # Also verifies identity, not just equal hit counts across repetitions.
-        identities = set(job.hits.values_list('lot__announcement__source', 'lot__source_id'))
+        identities = {(source, identifier, tuple(terms)) for source, identifier, terms in
+                      job.hits.values_list('lot__announcement__source', 'lot__source_id', 'terms')}
+        result['result_digest'] = hashlib.sha256(json.dumps(sorted(identities), ensure_ascii=False).encode()).hexdigest()
         transaction.set_rollback(True)
     return result, identities
 
@@ -103,20 +109,35 @@ def main():
     parser.add_argument('--search', required=True)
     parser.add_argument('--runs', type=int, default=3, choices=range(1, 11))
     parser.add_argument('--output', type=Path, help='Optional local JSON report path (keep in ignored data/).')
+    parser.add_argument('--reference', action='store_true', help='Disable new SQL candidates and cache for comparison.')
+    parser.add_argument('--no-cache', action='store_true', help='Measure SQL candidates without cache.')
+    parser.add_argument('--warm-cache', action='store_true', help='Prime only the candidate cache before rollback probes.')
+    parser.add_argument('--at', help='Freeze aware ISO time for comparable deadline/status checks.')
     args = parser.parse_args()
     original = WebSearch.objects.get(pk=args.search)
-    baseline = set(original.hits.values_list('lot__announcement__source', 'lot__source_id'))
+    baseline = {(source, identifier, tuple(terms)) for source, identifier, terms in
+                original.hits.values_list('lot__announcement__source', 'lot__source_id', 'terms')}
     previous = None
-    report = {'search_id': str(original.pk), 'original_elapsed_seconds':
+    report = {'search_id': str(original.pk), 'at': args.at, 'original_elapsed_seconds':
               (original.finished_at-original.created_at).total_seconds() if original.finished_at else None,
               'note': 'Synchronous rollback probes; excludes queue wait. SQL timings overlap stage timings. Live index may change between probes.',
               'runs': []}
-    for _ in range(args.runs):
-        result, identities = probe(original)
-        result['same_hits_as_original'] = identities == baseline
-        result['same_hits_as_previous_probe'] = None if previous is None else identities == previous
-        previous = identities
-        report['runs'].append(result)
+    with override_settings(SEARCH_DB_PREFILTERS=not args.reference,
+                           SEARCH_CANDIDATE_CACHE=not (args.reference or args.no_cache)), ExitStack() as stack:
+        if args.at:
+            at = datetime.fromisoformat(args.at.replace('Z', '+00:00'))
+            if at.tzinfo is None:
+                parser.error('--at must include a timezone')
+            stack.enter_context(patch('django.utils.timezone.now', return_value=at))
+        if args.warm_cache:
+            from tender_search.core.query_search import search_sources
+            search_sources(original.specification, timezone.now(), original.owner_id)
+        for _ in range(args.runs):
+            result, identities = probe(original)
+            result['same_hits_as_original'] = identities == baseline
+            result['same_hits_as_previous_probe'] = None if previous is None else identities == previous
+            previous = identities
+            report['runs'].append(result)
     rendered = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output:
         args.output.write_text(rendered+'\n', encoding='utf-8')

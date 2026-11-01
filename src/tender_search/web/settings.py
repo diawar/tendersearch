@@ -89,6 +89,10 @@ CELERY_TASK_ROUTES = {
     'tender_search.core.tasks.web_search': {'queue': 'interactive'},
 }
 USE_LOCAL_INDEX = True
+SEARCH_DB_PREFILTERS = True
+SEARCH_CANDIDATE_CACHE = False
+SEARCH_CACHE_TTL = 120
+SEARCH_CACHE_MAX_CANDIDATES = 10000
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 LOGGING = {"version": 1, "disable_existing_loggers": False,
            "handlers": {"console": {"class": "logging.StreamHandler"}},

@@ -211,7 +211,28 @@ class SearchHit(models.Model):
         constraints = [models.UniqueConstraint(fields=["search", "lot"], name="unique_search_hit")]
 
 
-class IndexedLot(models.Model):
+class SearchProjection(models.Model):
+    search_text = models.TextField(null=True, editable=False)
+    search_meta = models.JSONField(null=True, editable=False)
+    search_fingerprint = models.CharField(max_length=64, null=True, editable=False)
+
+    class Meta:
+        abstract = True
+
+    def save(self, *args, **kwargs):
+        fields = kwargs.get('update_fields')
+        if fields is None or 'row' in fields:
+            from .search_projection import projection
+            try:
+                self.search_text, self.search_meta, self.search_fingerprint = projection(self.row)
+            except (TypeError, ValueError, AttributeError):
+                self.search_text = self.search_meta = self.search_fingerprint = None
+            if fields is not None:
+                kwargs['update_fields'] = set(fields) | {'search_text', 'search_meta', 'search_fingerprint'}
+        return super().save(*args, **kwargs)
+
+
+class IndexedLot(SearchProjection):
     source_id = models.BigIntegerField(primary_key=True)
     announcement_source_id = models.BigIntegerField(null=True, db_index=True)
     registry_fingerprint = models.CharField(max_length=64, blank=True)
@@ -241,7 +262,7 @@ class ProcurementIndex(models.Model):
     paused = models.BooleanField(default=False)
 
 
-class MedicalIndexedLot(models.Model):
+class MedicalIndexedLot(SearchProjection):
     source = models.CharField(max_length=40)
     source_id = models.BigIntegerField()
     row = models.JSONField()
@@ -266,6 +287,18 @@ class MedicalIndex(models.Model):
     lease = models.CharField(max_length=64, blank=True)
     lease_until = models.DateTimeField(null=True)
     error = models.CharField(max_length=300, blank=True)
+
+
+class SearchIndexEpoch(models.Model):
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1)
+    revision = models.BigIntegerField(default=0)
+
+
+class SearchCandidateCache(models.Model):
+    key = models.CharField(primary_key=True, max_length=64)
+    revision = models.BigIntegerField()
+    candidates = models.JSONField()
+    expires_at = models.DateTimeField(db_index=True)
 
 
 class TelegramSubscription(Timestamped):

@@ -121,7 +121,8 @@ class IndexTests(TestCase):
         from io import StringIO
         module = 'tender_search.core.management.commands.index_procurements'
         with patch('tender_search.core.telegram_service.in_work_hours', return_value=False), \
-             patch(module+'.source_client') as source, patch(module+'.collect_index_page', return_value=True) as collect:
+             patch(module+'.source_client') as source, patch(module+'.collect_index_page', return_value=True) as collect, \
+             patch(module+'.close_old_connections'):
             call_command('index_procurements', once=True, stdout=StringIO())
         source.assert_called_once_with()
         collect.assert_called_once_with(source.return_value.__enter__.return_value)

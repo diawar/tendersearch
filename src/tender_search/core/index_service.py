@@ -293,19 +293,8 @@ def execute_local_search(job_id):
         if not filters.get('only_medical'):
             coverage['ready'] = coverage['ready'] and medical['ready']
         coverage['medical'] = medical
-        sources = [MedicalIndexedLot.objects.filter(current=True, deadline__gt=now)]
-        if not filters.get('only_medical'):
-            sources.append(IndexedLot.objects.filter(current=True, details_skipped=False, deadline__gt=now))
-        for key, field in [('status_id', 'status_id'), ('purchase_method_id', 'method_id')]:
-            raw = filters.get(key+'__in', filters.get(key))
-            if raw:
-                sources = [rows.filter(**{field+'__in': [int(value) for value in str(raw).split('__')]}) for rows in sources]
-        if filters.get('offer_end_date__gte'):
-            sources = [rows.filter(deadline__gte=date_value(filters['offer_end_date__gte'])) for rows in sources]
-        if filters.get('offer_end_date__lte'):
-            sources = [rows.filter(deadline__lte=date_value(filters['offer_end_date__lte'])) for rows in sources]
-        ids = str(filters.get('delivery_address_id__in') or '').split('__')
-        prefixes = [str(ref.raw.get('code')).rstrip('0') for ref in ReferenceEntry.objects.filter(kind__in=['katos','cities'],source_id__in=[int(i) for i in ids if i.isdigit()]) if ref.raw.get('code')]
+        from .query_search import search_sources
+        sources, prefixes, query_info = search_sources(spec, now, job.owner_id)
         supported = bool(spec.get('status_selection')) and all(str(s).startswith(('open:', 'upcoming:')) for s in spec['status_selection'])
         coverage['scope_supported'] = supported
         coverage['scope_note'] = '' if supported else 'Индекс охватывает только опубликованные закупки с неистёкшим сроком подачи. Архив и другие статусы не загружены полностью.'
@@ -313,7 +302,7 @@ def execute_local_search(job_id):
             supported = False
             coverage['scope_supported'] = False
             coverage['scope_note'] += ' Для MED/FMS адреса поставки доступны текстом; без подтверждённого кода КАТО лот не проходит фильтр области/города. Для полного поиска по медицинским площадкам снимите этот фильтр.'
-        job.source_counts = {'__index__': coverage, '__local_candidates__': sum(rows.count() for rows in sources)}
+        job.source_counts = {'__index__': coverage, '__local_candidates__': sum(rows.count() for rows in sources), '__query__': query_info}
         accepted = set()
         matcher = PreparedMatcher(spec)
         for row in chain.from_iterable(rows.order_by('source_id').values_list('row', flat=True).iterator(chunk_size=200) for rows in sources):
