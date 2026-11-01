@@ -87,7 +87,7 @@ def search(request):
                 job.status, job.error = "error", "Очередь поиска недоступна. Повторите попытку позже."
                 job.finished_at = timezone.now()
                 job.save(update_fields=["status", "error", "finished_at"])
-            return redirect("search_results", job_id=job.pk)
+            return redirect(f"{reverse('search_results', kwargs={'job_id': job.pk})}#search-results")
     return render(request, "core/search.html", {"form": form, "active_profile": profile, "profile_saved": bool(profile) and not form.is_bound, "profiles": SearchProfile.objects.filter(owner=request.user).order_by("-updated_at"), "recent": WebSearch.objects.filter(owner=request.user, specification__monitor_profile_id__isnull=True).order_by("-created_at")[:7]})
 
 
@@ -133,6 +133,13 @@ def search_results(request, job_id):
     hits = job.hits.select_related("lot__announcement", "lot__customer").annotate(
         publication=Cast(KeyTextTransform("announcement_publish_date", "lot__raw"), DateTimeField())
     ).order_by(F("publication").desc(nulls_last=True), "-lot__source_id")
+    remaining_days = request.GET.get('remaining', '')
+    if remaining_days in {'1', '2'}:
+        now = timezone.now()
+        hits = hits.filter(lot__announcement__deadline__gt=now,
+                           lot__announcement__deadline__lte=now+timedelta(days=int(remaining_days)))
+    else:
+        remaining_days = ''
     excluded_terms = job.specification.get("exclude", [])
     if excluded_terms:
         excluded_ids = [identifier for identifier, name, description in hits.values_list("pk", "lot__name", "lot__description").iterator()
@@ -172,7 +179,7 @@ def search_results(request, job_id):
         ignored = {'depth', 'pages', 'auto_pages', 'backend'}
         profile_saved = {k:v for k,v in current_spec.items() if k not in ignored} == {k:v for k,v in active_profile.filters.get('specification', {}).items() if k not in ignored}
     return render(request, template, {"active_profile": active_profile, "profile_saved": profile_saved, "job": job, "local_coverage": job.source_counts.get("__index__"), "page": page, "pending": job.status in {"queued", "running"},
-        "form": SearchForm(initial=initial), "profiles": SearchProfile.objects.filter(owner=request.user).order_by("-updated_at")})
+        "remaining_days": remaining_days, "form": SearchForm(initial=initial), "profiles": SearchProfile.objects.filter(owner=request.user).order_by("-updated_at")})
 
 
 def queue_refresh(lot):

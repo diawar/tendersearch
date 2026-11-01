@@ -9,12 +9,12 @@ from django.db import transaction
 from django.utils import timezone
 
 from tender_search.client import NotFound, SourceError, utc_datetime
-from tender_search.matching import match_lot
+from tender_search.matching import match_lot, PreparedMatcher
 from .models import IndexedLot, ProcurementIndex, ReferenceEntry, WebSearch, SearchHit, AnnouncementLotCache
 from .announcement_index import announcement_lot_row
 from .procurement_groups import status_matches
 from .advances import has_advance
-from .search_service import announcement_details, extended_description, lot_identity, store_lot
+from .search_service import announcement_details, extended_description, lot_identity, store_lot, store_search_hits
 
 ACTIVE_STATUSES = {6, 7, 9}
 PAGE_SIZE = 100
@@ -281,6 +281,7 @@ def execute_local_search(job_id):
     if not WebSearch.objects.filter(pk=job_id, status='queued').update(status='running', updated_at=timezone.now()):
         return
     job = WebSearch.objects.get(pk=job_id)
+    pending_hits = []
     try:
         now, spec = timezone.now(), job.specification
         filters = spec.get('filters', {})
@@ -314,13 +315,17 @@ def execute_local_search(job_id):
             coverage['scope_note'] += ' Для MED/FMS адреса поставки доступны текстом; без подтверждённого кода КАТО лот не проходит фильтр области/города. Для полного поиска по медицинским площадкам снимите этот фильтр.'
         job.source_counts = {'__index__': coverage, '__local_candidates__': sum(rows.count() for rows in sources)}
         accepted = set()
-        for record in chain.from_iterable(rows.order_by('source_id').iterator(chunk_size=200) for rows in sources):
+        matcher = PreparedMatcher(spec)
+        for row in chain.from_iterable(rows.order_by('source_id').values_list('row', flat=True).iterator(chunk_size=200) for rows in sources):
             if job.scanned % 100 == 0:
-                if not WebSearch.objects.filter(pk=job.pk,status='running').exists():
+                # The guarded update both checks cancellation and publishes
+                # progress, avoiding a separate SELECT for every 100 rows.
+                updated = WebSearch.objects.filter(pk=job.pk,status='running').update(
+                    scanned=job.scanned,source_counts=job.source_counts,updated_at=timezone.now())
+                if not updated:
+                    store_search_hits(job, pending_hits)
                     return
-                WebSearch.objects.filter(pk=job.pk,status='running').update(scanned=job.scanned,source_counts=job.source_counts,updated_at=timezone.now())
             job.scanned += 1
-            row = record.row
             if not local_matches(row, spec, now, prefixes):
                 continue
             amount = row.get('total_price')
@@ -328,15 +333,24 @@ def execute_local_search(job_id):
                 continue
             if filters.get('total_price__lte') is not None and (amount is None or Decimal(str(amount)) > Decimal(str(filters['total_price__lte']))):
                 continue
-            found = match_lot(row.get('name_ru') or row.get('name'), row.get('description_ru'), spec)
+            found = match_lot(row.get('name_ru') or row.get('name'), row.get('description_ru'), matcher)
             identity = lot_identity(row)
             if found and identity not in accepted:
                 accepted.add(identity)
-                lot = store_lot(row)
-                SearchHit.objects.get_or_create(search=job,lot=lot,defaults={'terms':found})
+                pending_hits.append((row, found))
+                if len(pending_hits) >= 50:
+                    batch, pending_hits = pending_hits, []
+                    store_search_hits(job, batch)
+        batch, pending_hits = pending_hits, []
+        store_search_hits(job, batch)
         job.complete = coverage['ready'] and supported
         job.status = 'done' if job.complete else 'partial'
     except Exception as exc:
+        if pending_hits:
+            try:
+                store_search_hits(job, pending_hits)
+            except Exception:
+                pass  # The original failure remains authoritative.
         job.status = 'partial' if job.hits.exists() else 'error'
         job.complete = False
         job.error = str(exc)[:300] if isinstance(exc, SourceError) else 'Не удалось проверить локальную базу. Повторите поиск.'

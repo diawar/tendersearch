@@ -3,6 +3,7 @@ from decimal import Decimal
 import logging
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from tender_search.client import SourceError, SchemaError, utc_datetime
 from tender_search.matching import match_lot
@@ -64,6 +65,79 @@ def store_lot(row):
                     setattr(lot, field, value)
             lot.save()
         return lot
+
+
+def reusable_search_lot(lot, row):
+    """Reuse a snapshot only when store_lot would preserve the same values.
+
+    Verified card fields keep their existing precedence. Customer and medical
+    announcement data are checked too, rather than assuming equal raw means
+    all related objects are still current.
+    """
+    if lot.raw != row:
+        return False
+    customers = row.get('customers') or []
+    customer = lot.customer
+    if customers:
+        value = customers[0]
+        if (customer is None or customer.source != row.get('_source', 'zakup')
+                or customer.source_id != value['id'] or customer.bin != (value.get('bin') or '')
+                or customer.name != (value.get('name_ru') or '')):
+            return False
+    elif customer is not None:
+        return False
+    values = {'external_id': row.get('external_id'), 'number': row.get('lot_number') or ''}
+    if lot.checked_at is None:
+        values.update(name=row.get('name_ru') or row.get('name') or 'Без названия',
+                      amount=Decimal(str(row['total_price'])) if row.get('total_price') is not None else None,
+                      status=row.get('status_name') or (row.get('status') or {}).get('name', ''))
+    if lot.checked_at is None or row.get('_extended_description'):
+        values['description'] = row.get('description_ru') or ''
+    if any(getattr(lot, key) != value for key, value in values.items()):
+        return False
+    if row.get('_source', 'zakup') != 'zakup' and row.get('_announcement'):
+        card, announcement = row['_announcement'], lot.announcement
+        if (announcement.raw != card or announcement.name != card['name_ru']
+                or announcement.status != card['status']['name']
+                or announcement.deadline != utc_datetime(card.get('offer_end_date'))):
+            return False
+    return True
+
+
+def store_search_hits(search, matches):
+    """Load existing snapshots together and insert hits in bounded batches."""
+    if not matches:
+        return
+    groups = {}
+    for row, _ in matches:
+        groups.setdefault(row.get('_source', 'zakup'), []).append(row)
+    query = Q(pk__in=[])
+    for source, rows in groups.items():
+        query |= Q(announcement__source=source,
+                   announcement__source_id__in={row['announcement_id'] for row in rows},
+                   source_id__in={row['id'] for row in rows})
+    existing = {(lot.announcement.source, lot.announcement.source_id, lot.source_id): lot
+                for lot in Lot.objects.filter(query).select_related('announcement', 'customer')}
+    hits = []
+    try:
+        for row, terms in matches:
+            key = (row.get('_source', 'zakup'), row['announcement_id'], row['id'])
+            lot = existing.get(key)
+            if lot is None or not reusable_search_lot(lot, row):
+                lot = store_lot(row)
+                existing[key] = lot
+                # Different lot snapshots may share a customer/announcement.
+                # Keep prefetched objects consistent with earlier writes in
+                # this batch so the last snapshot retains the same precedence.
+                for cached in existing.values():
+                    if lot.customer_id and cached.customer_id == lot.customer_id:
+                        cached.customer = lot.customer
+                    if cached.announcement_id == lot.announcement_id:
+                        cached.announcement = lot.announcement
+            hits.append(SearchHit(search=search, lot=lot, terms=terms))
+    finally:
+        # Preserve preceding successful rows even if a later row is malformed.
+        SearchHit.objects.bulk_create(hits, batch_size=50, ignore_conflicts=True)
 
 
 def resolve_customer(api, bin_value):
