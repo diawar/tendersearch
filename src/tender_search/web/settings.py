@@ -45,6 +45,10 @@ else:
         "PASSWORD": os.environ["POSTGRES_PASSWORD"],
         "HOST": os.getenv("POSTGRES_HOST", "db"), "PORT": "5432",
         "CONN_MAX_AGE": 60,
+        # Search iterators consume the complete candidate stream. PostgreSQL's
+        # default cursor plan assumes only 10% will be read and can choose a
+        # slow ordered scan instead of the selective bitmap/trigram plan.
+        "OPTIONS": {"options": "-c cursor_tuple_fraction=1.0"},
     }}
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},

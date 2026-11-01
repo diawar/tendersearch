@@ -3,6 +3,8 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
+from django.db import connection
 from django.utils import timezone
 
 from .models import SearchHit, WebSearch
@@ -54,6 +56,17 @@ class DeadlineFilterTests(TestCase):
         self.assertEqual(self.job.specification, {'terms': ['flash']})
         for value in ['invalid', '0', '-1', '3']:
             self.assertEqual(self.ids(self.fetch(value)), set(range(1, 9)))
+
+    def test_partial_filter_does_not_load_location_dictionaries(self):
+        self.owner.is_staff = True
+        self.owner.save(update_fields=['is_staff'])
+        with CaptureQueriesContext(connection) as queries:
+            response = self.fetch('1', HTTP_HX_REQUEST='true')
+        self.assertEqual(self.ids(response), {4, 5})
+        self.assertFalse(any('core_referenceentry' in query['sql'].lower() for query in queries))
+        self.assertFalse(any('core_indexedlot' in query['sql'].lower() or 'core_medicalindexedlot' in query['sql'].lower()
+                             for query in queries))
+        self.assertNotContains(response, 'Проверено записей')
 
     def test_view_switch_and_pagination_keep_filter(self):
         for identifier in range(20, 46):

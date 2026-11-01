@@ -1,4 +1,5 @@
 from .models import Favorite
+from django.utils.functional import SimpleLazyObject
 
 
 def favorite_counts(request):
@@ -7,9 +8,14 @@ def procurement_coverage(request):
     if not request.user.is_authenticated or not request.user.is_staff or not request.path.startswith('/search/'):
         return {}
     from .index_service import index_coverage, date_value
-    coverage = index_coverage()
-    coverage['completed_date'] = date_value(coverage['completed_at'])
+    def load_coverage():
+        coverage = index_coverage()
+        coverage['completed_date'] = date_value(coverage['completed_at'])
+        return coverage
+    # Results fragments do not display index statistics. Defer their expensive
+    # counts until a template actually uses the administrative coverage block.
+    coverage = SimpleLazyObject(load_coverage)
     from .medical_index import coverage as medical_coverage
     from .platform_status import platform_statuses
-    return {'index_coverage': coverage, 'medical_coverage': medical_coverage(),
-            'platform_statuses': platform_statuses(coverage)}
+    return {'index_coverage': coverage, 'medical_coverage': SimpleLazyObject(medical_coverage),
+            'platform_statuses': SimpleLazyObject(lambda: platform_statuses(coverage))}

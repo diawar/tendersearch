@@ -28,22 +28,33 @@ def lot_identity(row):
     return ("source", row["id"])
 
 
-def store_lot(row):
+def store_lot(row, *, existing=None):
     """Keep public list snapshots separate from verified announcement cards."""
     aid = row.get("announcement_id")
     if not isinstance(aid, int) or not isinstance(row.get("id"), int):
         raise SchemaError("У лота отсутствуют идентификаторы источника")
     with transaction.atomic():
         source = row.get('_source', 'zakup')
-        announcement, created = Announcement.objects.get_or_create(source=source, source_id=aid,
-            defaults={"name": row.get("announcement_name_ru") or "", "number": row.get("announcement_number") or "",
-                      "external_id": row.get("announcement_external_id"), "deadline": utc_datetime(row.get("offer_end_date"))})
+        if existing is not None:
+            announcement = existing.announcement
+            if (existing.source_id != row['id'] or announcement.source != source
+                    or announcement.source_id != aid):
+                raise SchemaError('Сохранённый лот не соответствует источнику')
+        else:
+            announcement, _ = Announcement.objects.get_or_create(source=source, source_id=aid,
+                defaults={"name": row.get("announcement_name_ru") or "", "number": row.get("announcement_number") or "",
+                          "external_id": row.get("announcement_external_id"), "deadline": utc_datetime(row.get("offer_end_date"))})
         customer = None
         customers = row.get("customers") or []
         if customers:
             c = customers[0]
-            customer, _ = Customer.objects.update_or_create(source=source, source_id=c["id"],
-                defaults={"bin": c.get("bin") or "", "name": c.get("name_ru") or ""})
+            cached = existing.customer if existing is not None else None
+            if (cached is not None and cached.source == source and cached.source_id == c['id']
+                    and cached.bin == (c.get('bin') or '') and cached.name == (c.get('name_ru') or '')):
+                customer = cached
+            else:
+                customer, _ = Customer.objects.update_or_create(source=source, source_id=c["id"],
+                    defaults={"bin": c.get("bin") or "", "name": c.get("name_ru") or ""})
         if source != 'zakup' and row.get('_announcement'):
             card = row['_announcement']
             announcement.name = card['name_ru']
@@ -58,7 +69,10 @@ def store_lot(row):
             "amount": Decimal(str(row["total_price"])) if row.get("total_price") is not None else None,
             "status": row.get("status_name") or (row.get("status") or {}).get("name", ""), "raw": row,
         }
-        lot, created = Lot.objects.get_or_create(announcement=announcement, source_id=row["id"], defaults=defaults)
+        if existing is None:
+            lot, created = Lot.objects.get_or_create(announcement=announcement, source_id=row["id"], defaults=defaults)
+        else:
+            lot, created = existing, False
         if not created:
             for field, value in defaults.items():
                 if lot.checked_at is None or field in {"raw", "customer", "external_id", "number"} or (field == "description" and row.get("_extended_description")):
@@ -124,7 +138,7 @@ def store_search_hits(search, matches):
             key = (row.get('_source', 'zakup'), row['announcement_id'], row['id'])
             lot = existing.get(key)
             if lot is None or not reusable_search_lot(lot, row):
-                lot = store_lot(row)
+                lot = store_lot(row, existing=lot)
                 existing[key] = lot
                 # Different lot snapshots may share a customer/announcement.
                 # Keep prefetched objects consistent with earlier writes in

@@ -245,6 +245,11 @@ class IndexedLot(SearchProjection):
     current = models.BooleanField(default=True, db_index=True)
     details_skipped = models.BooleanField(default=False, db_index=True)
 
+    class Meta:
+        indexes = [models.Index(fields=['deadline'],
+                               condition=models.Q(current=True, row___details_pending=True),
+                               name='idx_pending_details_deadline')]
+
 
 class ProcurementIndex(models.Model):
     id = models.PositiveSmallIntegerField(primary_key=True, default=1)

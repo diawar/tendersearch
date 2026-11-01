@@ -82,6 +82,7 @@ def probe(original):
         start = perf_counter()
         with ExitStack() as stack, connection.execute_wrapper(measurements.execute), \
                 patch.object(QuerySet, 'iterator', timed_iterator), \
+                patch.object(index_service, 'index_coverage', measurements.timed('index_statistics', index_service.index_coverage)), \
                 patch.object(index_service, 'local_matches', measurements.timed('filters', index_service.local_matches)), \
                 patch.object(index_service, 'match_lot', measurements.timed('text_matching', index_service.match_lot)), \
                 patch.object(index_service, 'store_lot', measurements.timed('save_lots', index_service.store_lot)), \

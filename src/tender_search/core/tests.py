@@ -213,7 +213,7 @@ class SearchTests(TestCase):
             response = self.client.post("/search/", {"terms": "телефон", "mode": "any", "kind": "word", "pages": "1", "number_kind": "lot_number"})
         self.assertEqual(response.status_code, 302)
         delay.assert_called_once()
-        self.assertContains(self.client.get(response.url), "hx-trigger=\"load delay:2s\"")
+        self.assertContains(self.client.get(response.url), "hx-trigger=\"load delay:500ms\"")
 
     def test_list_snapshot_does_not_overwrite_verified_card(self):
         lot = store_lot(sample_lot())

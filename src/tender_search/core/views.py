@@ -133,6 +133,10 @@ def search_results(request, job_id):
     hits = job.hits.select_related("lot__announcement", "lot__customer").annotate(
         publication=Cast(KeyTextTransform("announcement_publish_date", "lot__raw"), DateTimeField())
     ).order_by(F("publication").desc(nulls_last=True), "-lot__source_id")
+    if job.status in {'queued', 'running'}:
+        # Intermediate hits are hidden until completion; avoid loading their
+        # rows and related objects on every readiness poll.
+        hits = hits.none()
     remaining_days = request.GET.get('remaining', '')
     if remaining_days in {'1', '2'}:
         now = timezone.now()
@@ -147,7 +151,13 @@ def search_results(request, job_id):
         hits = hits.exclude(pk__in=excluded_ids)
     page = Paginator(hits, 25).get_page(request.GET.get("page"))
     result_context(request, [hit.lot for hit in page])
-    template = "core/_results.html" if request.headers.get("HX-Request") else "core/results.html"
+    if request.headers.get("HX-Request"):
+        # Filtering, pagination and polling only replace the results block.
+        # Building SearchForm here would reload large location dictionaries.
+        return render(request, "core/_results.html", {
+            "job": job, "local_coverage": job.source_counts.get("__index__"),
+            "page": page, "pending": job.status in {"queued", "running"},
+            "remaining_days": remaining_days})
     spec = job.specification
     initial = {"terms": "; ".join(spec.get("terms", [])), "exclude": "; ".join(spec.get("exclude", [])),
                "mode": spec.get("mode", "any"), "kind": spec.get("kind", "contains"), "pages": spec.get("pages", 1), "depth": spec.get("depth", 500),
@@ -178,7 +188,7 @@ def search_results(request, job_id):
         current_spec = {key: value for key, value in spec.items() if key != "profile_id"}
         ignored = {'depth', 'pages', 'auto_pages', 'backend'}
         profile_saved = {k:v for k,v in current_spec.items() if k not in ignored} == {k:v for k,v in active_profile.filters.get('specification', {}).items() if k not in ignored}
-    return render(request, template, {"active_profile": active_profile, "profile_saved": profile_saved, "job": job, "local_coverage": job.source_counts.get("__index__"), "page": page, "pending": job.status in {"queued", "running"},
+    return render(request, "core/results.html", {"active_profile": active_profile, "profile_saved": profile_saved, "job": job, "local_coverage": job.source_counts.get("__index__"), "page": page, "pending": job.status in {"queued", "running"},
         "remaining_days": remaining_days, "form": SearchForm(initial=initial), "profiles": SearchProfile.objects.filter(owner=request.user).order_by("-updated_at")})
 
 
