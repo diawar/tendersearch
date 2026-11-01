@@ -302,7 +302,9 @@ def execute_local_search(job_id):
             supported = False
             coverage['scope_supported'] = False
             coverage['scope_note'] += ' Для MED/FMS адреса поставки доступны текстом; без подтверждённого кода КАТО лот не проходит фильтр области/города. Для полного поиска по медицинским площадкам снимите этот фильтр.'
-        job.source_counts = {'__index__': coverage, '__local_candidates__': sum(rows.count() for rows in sources), '__query__': query_info}
+        # The stream is consumed completely. A separate COUNT would run the
+        # expensive keyword candidate query twice solely for diagnostics.
+        job.source_counts = {'__index__': coverage, '__local_candidates__': None, '__query__': query_info}
         accepted = set()
         matcher = PreparedMatcher(spec)
         for row in chain.from_iterable(rows.order_by('source_id').values_list('row', flat=True).iterator(chunk_size=200) for rows in sources):
@@ -330,6 +332,7 @@ def execute_local_search(job_id):
                 if len(pending_hits) >= 50:
                     batch, pending_hits = pending_hits, []
                     store_search_hits(job, batch)
+        job.source_counts['__local_candidates__'] = job.scanned
         batch, pending_hits = pending_hits, []
         store_search_hits(job, batch)
         job.complete = coverage['ready'] and supported

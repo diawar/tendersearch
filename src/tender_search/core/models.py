@@ -306,6 +306,85 @@ class SearchCandidateCache(models.Model):
     expires_at = models.DateTimeField(db_index=True)
 
 
+class LeadCompany(Timestamped):
+    STATUS_CHOICES = [('new', 'Новый'), ('contacted', 'Связались'), ('client', 'Клиент'), ('excluded', 'Не связываться')]
+    identifier = models.CharField(max_length=12, unique=True)
+    identifier_kind = models.CharField(max_length=3, blank=True)
+    name = models.TextField()
+    registry_id = models.PositiveBigIntegerField(null=True, blank=True)
+    registry_url = models.URLField(max_length=500, blank=True)
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default='new', db_index=True)
+    notes = models.TextField(blank=True)
+    last_seen_at = models.DateTimeField(default=timezone.now)
+    contact_state = models.CharField(max_length=12, default='pending', db_index=True,
+        choices=[('pending', 'Ожидает проверки'), ('ready', 'E-mail найден'), ('missing', 'E-mail не опубликован'), ('error', 'Ошибка проверки')])
+    contact_checked_at = models.DateTimeField(null=True, blank=True)
+    next_contact_check_at = models.DateTimeField(default=timezone.now, db_index=True)
+    contact_attempts = models.PositiveIntegerField(default=0)
+    contact_error = models.CharField(max_length=300, blank=True)
+
+    def __str__(self):
+        return f'{self.identifier} — {self.name[:100]}'
+
+
+class LeadEmail(Timestamped):
+    company = models.ForeignKey(LeadCompany, on_delete=models.CASCADE, related_name='emails')
+    email = models.EmailField(max_length=254)
+    source_url = models.URLField(max_length=500)
+    verified_at = models.DateTimeField(default=timezone.now)
+    current = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['company', 'email'], name='unique_company_lead_email')]
+
+
+class LeadProcurement(Timestamped):
+    source_id = models.PositiveBigIntegerField(unique=True)
+    external_id = models.PositiveBigIntegerField(db_index=True)
+    number = models.CharField(max_length=100)
+    name = models.TextField()
+    method_name = models.CharField(max_length=300, blank=True)
+    results_published_at = models.DateTimeField(db_index=True)
+    state = models.CharField(max_length=12, default='queued', db_index=True,
+        choices=[('queued', 'В очереди'), ('processing', 'Обрабатывается'), ('done', 'Обработан'), ('retry', 'Повторная попытка'), ('review', 'Требует проверки')])
+    protocol_url = models.URLField(max_length=500, blank=True)
+    participants_count = models.PositiveIntegerField(default=0)
+    attempts = models.PositiveIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(default=timezone.now, db_index=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    error = models.CharField(max_length=300, blank=True)
+
+    @property
+    def source_url(self):
+        return f'https://old.goszakup.gov.kz/ru/announce/index/{self.external_id}?tab=protocols'
+
+
+class LeadParticipation(Timestamped):
+    company = models.ForeignKey(LeadCompany, on_delete=models.CASCADE, related_name='participations')
+    procurement = models.ForeignKey(LeadProcurement, on_delete=models.CASCADE, related_name='participations')
+    supplier_name = models.TextField()
+    lot_numbers = models.JSONField(default=list)
+    winner = models.BooleanField(default=False)
+    protocol_url = models.URLField(max_length=500)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['company', 'procurement'], name='unique_lead_participation')]
+
+
+class LeadCollectionState(models.Model):
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1)
+    enabled = models.BooleanField(default=False)
+    lookback_days = models.PositiveSmallIntegerField(default=30)
+    windows = models.JSONField(default=list)
+    started_at = models.DateTimeField(null=True)
+    completed_at = models.DateTimeField(null=True)
+    next_scan_at = models.DateTimeField(null=True)
+    heartbeat_at = models.DateTimeField(null=True)
+    lease = models.CharField(max_length=64, blank=True)
+    lease_until = models.DateTimeField(null=True)
+    error = models.CharField(max_length=300, blank=True)
+
+
 class TelegramSubscription(Timestamped):
     owner = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     chat_id = models.BigIntegerField(null=True, blank=True, unique=True)

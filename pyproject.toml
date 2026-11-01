@@ -15,10 +15,11 @@ dependencies = [
     "celery[redis]>=5.5,<6",
     "gunicorn>=23,<24; sys_platform != 'win32'",
     "whitenoise>=6.8,<7",
+    "pypdf>=6,<7",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<10", "pypdf>=6,<7"]
+dev = ["pytest>=8,<10"]
 
 [project.scripts]
 tender-search = "tender_search.cli:main"
