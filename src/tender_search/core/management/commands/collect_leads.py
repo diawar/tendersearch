@@ -1,6 +1,7 @@
 import time
 
-from django.core.management import BaseCommand
+from django.core.management import BaseCommand, CommandError
+from django.conf import settings
 from django.db import close_old_connections
 
 from tender_search.core.lead_service import collect_lead_round, set_collection_enabled
@@ -16,6 +17,8 @@ class Command(BaseCommand):
         parser.add_argument('--pause', action='store_true')
 
     def handle(self, *args, **options):
+        if not settings.LEAD_COLLECTION_AVAILABLE:
+            raise CommandError('Сбор базы клиентов недоступен в этой версии.')
         if options['enable'] or options['pause']:
             set_collection_enabled(options['enable'] and not options['pause'])
             self.stdout.write('Lead collection enabled.' if not options['pause'] else 'Lead collection paused.')

@@ -57,6 +57,9 @@ class PlatformStatusTests(TestCase):
         self.assertNotContains(page, 'index-coverage')
         user.is_staff = True
         user.save(update_fields=['is_staff'])
+        self.assertEqual(self.client.get(reverse('index_status')).status_code, 403)
+        user.is_superuser = True
+        user.save(update_fields=['is_superuser'])
         response = self.client.get(reverse('index_status'))
         self.assertContains(response, 'База активных закупок')
         self.assertContains(response, 'PRIVATE ERROR')
@@ -81,7 +84,7 @@ class PlatformStatusTests(TestCase):
         state.completed_at = now
         state.save()
         self.assertEqual(index_coverage()['elapsed_label'], '00:02:05')
-        user = get_user_model().objects.create_user('timer-admin', is_staff=True)
+        user = get_user_model().objects.create_superuser('admin')
         self.client.force_login(user)
         self.assertContains(self.client.get(reverse('index_status')), 'Последний обход занял:')
         self.assertContains(self.client.get(reverse('index_status')), '00:02:05')

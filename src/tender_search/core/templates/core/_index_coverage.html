@@ -1,4 +1,4 @@
-{% if user.is_staff %}
+{% if can_manage_users %}
 <section class="panel index-coverage platform-coverage" id="index-coverage" aria-label="База активных закупок" hx-get="{% url 'index_status' %}" hx-trigger="every 15s" hx-swap="outerHTML">
 <strong>База активных закупок</strong>
 {% if index_coverage.elapsed_label %}<div class="coverage-timing">{% if index_coverage.building %}Время с начала обхода:{% else %}Последний обход занял:{% endif %} <strong data-index-elapsed="{{ index_coverage.elapsed_seconds }}" data-running="{{ index_coverage.building|yesno:'true,false' }}">{{ index_coverage.elapsed_label }}</strong></div>{% endif %}

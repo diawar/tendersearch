@@ -1,5 +1,5 @@
 {% extends 'core/base.html' %}
-{% block title %}{{ company.name }} — Клиенты — TenderSearch{% endblock %}
+{% block title %}{{ company.name }} — Клиенты — Госзакупки{% endblock %}
 {% block content %}
 <p class="breadcrumb"><a href="{% url 'administration_leads' %}">Администрирование / Потенциальные клиенты</a></p>
 <h1>{{ company.name }}</h1><p class="muted">{% if company.identifier_kind == 'iin' %}ИИН{% else %}БИН/ИИН{% endif %}: {{ company.identifier }} · Добавлена {{ company.created_at|date:'d.m.Y H:i' }}</p>

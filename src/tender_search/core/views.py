@@ -24,7 +24,8 @@ from tender_search.client import utc_datetime, SchemaError
 
 @login_required
 def index_status(request):
-    if not request.user.is_staff:
+    from .user_admin import can_manage_users
+    if not can_manage_users(request.user):
         raise PermissionDenied
     return render(request, 'core/_index_coverage.html')
 

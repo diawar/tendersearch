@@ -1,5 +1,5 @@
 {% extends 'core/base.html' %}{% load search_tags %}
-{% block title %}База e-mail компаний — TenderSearch{% endblock %}
+{% block title %}База e-mail компаний — Госзакупки{% endblock %}
 {% block content %}
 <h1>Администрирование</h1>
 <div class="lead-page-heading"><div><h2>База e-mail компаний</h2><p class="muted">Названия компаний и опубликованные контактные e-mail в одной базе.</p></div><div class="actions lead-toolbar"><a class="outline" href="{% url 'administration_leads' %}?{{ page_query }}">Обновить</a><a class="outline" href="{% url 'administration_leads_export' %}?{{ page_query }}">Скачать базу e-mail CSV</a><form method="post">{% csrf_token %}{% if collection.enabled %}<button class="outline" name="action" value="pause">Приостановить сбор</button>{% else %}<button class="primary" name="action" value="start">Включить сбор</button>{% endif %}</form></div></div>

@@ -3,6 +3,7 @@ from datetime import timedelta
 import uuid
 
 from django.db import transaction
+from django.conf import settings
 from django.db.models import F
 from django.utils import timezone
 
@@ -12,6 +13,8 @@ from .models import LeadCollectionState, LeadCompany, LeadEmail, LeadParticipati
 
 
 def set_collection_enabled(enabled):
+    if enabled and not settings.LEAD_COLLECTION_AVAILABLE:
+        raise ValueError('Сбор базы клиентов недоступен в этой версии.')
     state, _ = LeadCollectionState.objects.get_or_create(pk=1)
     LeadCollectionState.objects.filter(pk=1).update(enabled=enabled)
     return state
@@ -22,6 +25,8 @@ def _message(exc):
 
 
 def claim_collection():
+    if not settings.LEAD_COLLECTION_AVAILABLE:
+        return None
     now = timezone.now()
     with transaction.atomic():
         state, _ = LeadCollectionState.objects.get_or_create(pk=1)

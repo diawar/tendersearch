@@ -127,6 +127,7 @@ class LeadParserTests(SimpleTestCase):
             portal.contacts('123456789012')
 
 
+@override_settings(LEAD_COLLECTION_AVAILABLE=True)
 class LeadCollectionTests(TestCase):
     def setUp(self):
         self.now = timezone.now()
@@ -241,12 +242,13 @@ class LeadCollectionTests(TestCase):
 
 @override_settings(STORAGES={'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
                             'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'}})
+@override_settings(LEAD_COLLECTION_AVAILABLE=True)
 class LeadAdministrationTests(TestCase):
     def setUp(self):
         self.staff = get_user_model().objects.create_user('lead-admin', is_staff=True)
         self.user = get_user_model().objects.create_user('lead-user')
         self.company = LeadCompany.objects.create(identifier='123456789012', name='Alpha')
-        self.url = '/administration/'
+        self.url = '/administration/clients/'
 
     def test_only_staff_can_read_or_manage_leads(self):
         self.assertEqual(self.client.get(self.url).status_code, 302)

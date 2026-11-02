@@ -2,13 +2,14 @@ import csv
 from datetime import timedelta
 
 from django import forms
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import Count, Prefetch, Q
 from django.db.models.functions import Lower
-from django.http import StreamingHttpResponse
+from django.http import StreamingHttpResponse, Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 
@@ -17,6 +18,8 @@ from .models import LeadCollectionState, LeadCompany, LeadEmail
 
 
 def require_staff(request):
+    if not settings.LEAD_COLLECTION_AVAILABLE:
+        raise Http404
     if not request.user.is_staff:
         raise PermissionDenied
 

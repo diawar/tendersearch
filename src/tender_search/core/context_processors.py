@@ -3,9 +3,12 @@ from django.utils.functional import SimpleLazyObject
 
 
 def favorite_counts(request):
-    return {"favorite_count": Favorite.objects.filter(owner=request.user).count() if request.user.is_authenticated else 0}
+    from .user_admin import can_manage_users
+    return {"favorite_count": Favorite.objects.filter(owner=request.user).count() if request.user.is_authenticated else 0,
+            "can_manage_users": can_manage_users(request.user)}
 def procurement_coverage(request):
-    if not request.user.is_authenticated or not request.user.is_staff or not request.path.startswith('/search/'):
+    from .user_admin import can_manage_users
+    if not can_manage_users(request.user) or not request.path.startswith('/search/'):
         return {}
     from .index_service import index_coverage, date_value
     def load_coverage():

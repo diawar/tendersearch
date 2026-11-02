@@ -6,6 +6,7 @@ from django.http import HttpResponseForbidden
 from tender_search.core.views import dashboard, health
 from tender_search.core import views
 from tender_search.core import lead_views
+from tender_search.core import user_admin
 
 urlpatterns = [
     path("", dashboard, name="dashboard"),
@@ -22,7 +23,10 @@ urlpatterns = [
     path("lots/<int:lot_id>/refresh/", views.lot_refresh, name="lot_refresh"),
     path("lots/<int:lot_id>/favorite/", views.favorite, name="favorite"),
     path("settings/", views.notification_settings, name="notification_settings"),
-    path("administration/", lead_views.leads, name="administration_leads"),
+    path("administration/", user_admin.users, name="administration_users"),
+    path("administration/users/<int:user_id>/edit/", user_admin.edit_user, name="administration_user_edit"),
+    path("administration/users/<int:user_id>/delete/", user_admin.delete_user, name="administration_user_delete"),
+    path("administration/clients/", lead_views.leads, name="administration_leads"),
     path("administration/collection-status/", lead_views.collection_status, name="lead_collection_status"),
     path("administration/clients/export/", lead_views.export_leads, name="administration_leads_export"),
     path("administration/clients/<int:company_id>/", lead_views.lead_detail, name="administration_lead_detail"),

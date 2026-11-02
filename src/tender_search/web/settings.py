@@ -93,6 +93,7 @@ CELERY_TASK_ROUTES = {
     'tender_search.core.tasks.web_search': {'queue': 'interactive'},
 }
 USE_LOCAL_INDEX = True
+LEAD_COLLECTION_AVAILABLE = False
 SEARCH_DB_PREFILTERS = True
 SEARCH_CANDIDATE_CACHE = False
 SEARCH_CACHE_TTL = 120

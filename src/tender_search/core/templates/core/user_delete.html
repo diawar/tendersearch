@@ -1,0 +1,14 @@
+{% extends 'core/base.html' %}
+{% block title %}Удаление пользователя — Госзакупки{% endblock %}
+{% block content %}
+<h1>Удалить пользователя «{{ account.username }}»?</h1>
+<section class="panel user-create">
+  <p>Будут удалены его подборки, избранное, история поиска и задания на отслеживание. Отменить удаление нельзя.</p>
+  <form method="post">
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+    <label class="user-confirm">{{ form.confirm }} {{ form.confirm.label }}</label>{{ form.confirm.errors }}
+    <div class="user-actions"><button class="primary user-delete-button" type="submit">Удалить пользователя</button><a href="{% url 'administration_users' %}">Отмена</a></div>
+  </form>
+</section>
+{% endblock %}
