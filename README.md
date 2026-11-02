@@ -21,6 +21,8 @@
 
 ## Запуск на новом компьютере
 
+Подробный порядок новой установки, обновления, переноса данных и настройки HTTPS: [инструкция для ИИ-агента](docs/AGENT_INSTALLATION.md).
+
 Нужны Git, Python 3.11+ и Docker с Compose. На Windows — Docker Desktop с WSL 2.
 
 ```powershell
