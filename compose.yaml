@@ -117,6 +117,17 @@ services:
     restart: unless-stopped
     mem_limit: 384m
 
+  collection-monitor:
+    <<: *app
+    command: [python, manage.py, monitor_collections]
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 256m
+
   medical-indexer:
     <<: *app
     command: [python, manage.py, index_medical]

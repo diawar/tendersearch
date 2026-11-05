@@ -13,6 +13,8 @@ class SubjectTests(TestCase):
         self.owner = get_user_model().objects.create_user('subjects-owner')
 
     def test_legacy_modes_use_keywords_in_form_and_saved_profile(self):
+        from .models import TelegramSubscription
+        TelegramSubscription.objects.create(owner=self.owner, enabled=True, chat_id=self.owner.pk)
         from unittest.mock import patch
         self.client.force_login(self.owner)
         expected = ['беспроводная', 'мышь', 'игровая', 'клавиатура']
@@ -58,6 +60,8 @@ class SubjectTests(TestCase):
         self.assertFalse(subject_matches({'purchase_subject_id':[3]},'1'))
 
     def test_profile_and_results_restore_radio_and_old_profiles_default_to_all(self):
+        from .models import TelegramSubscription
+        TelegramSubscription.objects.create(owner=self.owner, enabled=True, chat_id=self.owner.pk)
         self.client.force_login(self.owner)
         data={'terms':'flash','exclude':'','mode':'any','kind':'contains','number_kind':'lot_number','action':'save'}
         self.assertEqual(SearchForm()['subject'].value(), '')

@@ -95,7 +95,7 @@ if(profileForm){
   return JSON.stringify(values);
  }
  const savedSignature=profileForm.dataset.saved==='true'?signature():null;
- const updateSave=()=>{if(save)save.disabled=savedSignature!==null&&signature()===savedSignature;};
+ const updateSave=()=>{if(save)save.disabled=profileForm.dataset.saveAllowed!=='true'||(savedSignature!==null&&signature()===savedSignature);};
  profileForm.addEventListener('input',updateSave);profileForm.addEventListener('change',updateSave);profileForm.addEventListener('click',()=>queueMicrotask(updateSave));updateSave();
 }
 
@@ -190,3 +190,67 @@ if(conditionsForm){conditionsForm.addEventListener('submit',event=>{if(!event.de
 document.addEventListener('htmx:afterSwap',syncSearchBusy);
 window.addEventListener('pageshow',syncSearchBusy);
 syncSearchBusy();
+
+// Do not discard a workflow edit when the saved collection refreshes itself.
+document.addEventListener('input',event=>{
+ const form=event.target.form;if(form?.matches('.collection-stage-form, .collection-note-form, .lot-note-form, .lot-price-form'))form.dataset.dirty='true';
+});
+document.addEventListener('change',event=>{
+ const form=event.target.form;if(form?.matches('.collection-stage-form, .collection-note-form, .lot-note-form, .lot-price-form'))form.dataset.dirty='true';
+});
+document.addEventListener('htmx:beforeRequest',event=>{
+ if(event.detail.elt?.id==='lot-detail'){
+  if(document.querySelector('.lot-note-form[data-dirty="true"], .lot-price-form[data-dirty="true"]')||document.activeElement?.form?.matches('.lot-note-form, .lot-price-form'))event.preventDefault();
+  return;
+ }
+ if(event.detail.elt?.id!=='collection-workspace')return;
+ if(document.querySelector('.collection-stage-form[data-dirty="true"], .collection-note-form[data-dirty="true"]')||document.activeElement?.form?.matches('.collection-stage-form, .collection-note-form, .lot-note-form, .lot-price-form'))event.preventDefault();
+});
+
+// Refresh only personal controls: keep filters, workflow edits and notes intact.
+(() => {
+ const owner=document.body.dataset.userId;
+ if(!owner)return;
+ let busy=false,again=false,timer;
+ async function syncLotState(){
+  if(document.hidden)return;
+  if(busy){again=true;return;}
+  const ids=[...new Set([...document.querySelectorAll('.lot-actions[data-lot-id]')].map(el=>el.dataset.lotId))];
+  if(!ids.length)return;
+  busy=true;
+  try{
+   for(let offset=0;offset<ids.length;offset+=100){
+    const response=await fetch(document.body.dataset.lotStateUrl+'?ids='+ids.slice(offset,offset+100).join(','),{credentials:'same-origin',cache:'no-store'});
+    if(!response.ok)continue;
+    const state=await response.json();if(state.owner!==owner)return;
+    const count=document.querySelector('#sidebar-favorite-count');if(count)count.textContent='('+state.favorite_count+')';
+    const collectionCount=document.querySelector('#sidebar-collection-count');if(collectionCount&&Number.isInteger(state.collection_count))collectionCount.textContent='('+state.collection_count+')';
+    for(const lot of state.lots){
+     document.querySelectorAll('.lot-actions[data-lot-id="'+lot.id+'"]').forEach(actions=>{
+      for(const [selector,selected,on,off] of [['.favorite-icon',lot.favorite,'remove','add'],['.status-watch-icon',lot.watched,'off','on']]){
+       const button=actions.querySelector(selector);if(!button)continue;
+       button.classList.toggle('selected',selected);button.setAttribute('aria-pressed',String(selected));
+       const input=button.form?.elements.namedItem('action');if(input)input.value=selected?on:off;
+       button.title=selector==='.favorite-icon'?(selected?'Убрать из избранного':'В избранное'):(selected?'Отключить':'Включить')+' Telegram-слежение за статусом объявления';
+       button.setAttribute('aria-label',button.title+': '+actions.dataset.lotNumber);
+      }
+      const badge=actions.querySelector('.collection-membership');if(badge)badge.hidden=!lot.saved;
+     });
+    }
+   }
+  }catch(error){/* Leave the last confirmed state on a transient network error. */}
+  finally{busy=false;if(again){again=false;schedule();}}
+ }
+ function schedule(){clearTimeout(timer);timer=setTimeout(syncLotState,150);}
+ const channel=typeof BroadcastChannel==='function'?new BroadcastChannel('lot-state-'+owner):null;
+ if(channel)channel.onmessage=schedule;
+ document.addEventListener('htmx:afterRequest',event=>{
+  const path=event.detail.requestConfig?.path||'';
+  if(event.detail.successful&&/\/lots\/\d+\/(favorite|status-watch)\//.test(path)){schedule();channel?.postMessage('changed');}
+ });
+ document.addEventListener('htmx:afterSwap',schedule);
+ window.addEventListener('pageshow',()=>{schedule();channel?.postMessage('view-opened');});
+ window.addEventListener('focus',schedule);
+ document.addEventListener('visibilitychange',schedule);
+ setInterval(schedule,30000);
+})();

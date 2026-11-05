@@ -148,6 +148,15 @@ def users(request):
         else:
             messages.success(request, f'Пользователь «{user.username}» добавлен.')
             return redirect('administration_users')
-    return render(request, 'core/users.html', {
-        'form': form, 'users': get_user_model().objects.order_by('username'),
-    })
+    from .models import TelegramContact, TelegramSubscription
+    contacts = {contact.chat_id: contact for contact in TelegramContact.objects.filter(
+        chat_id__in=TelegramSubscription.objects.exclude(chat_id=None).values('chat_id'))}
+    accounts = get_user_model().objects.select_related('telegramsubscription').order_by('username')
+    for account in accounts:
+        sub = getattr(account, 'telegramsubscription', None)
+        chat_id = sub.chat_id if sub else None
+        contact = contacts.get(chat_id)
+        account.telegram_status = 'Подключён' if chat_id is not None and sub.enabled else ('Отключён' if chat_id is not None else 'Не подключён')
+        account.telegram_nick = contact.username if contact else ''
+        account.telegram_name = ' '.join(filter(None, (contact.first_name, contact.last_name))) if contact else ''
+    return render(request, 'core/users.html', {'form': form, 'users': accounts})

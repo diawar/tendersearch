@@ -188,7 +188,7 @@ class LeadPortal:
 
     def read(self, url, max_bytes=2*1024*1024):
         parts = urlsplit(url)
-        allowed = (parts.hostname == 'old.goszakup.gov.kz' and re.fullmatch(
+        allowed = (parts.hostname in {'old.goszakup.gov.kz', 'goszakup.gov.kz'} and re.fullmatch(
             r'/ru/(?:announce/index|registry/show_supplier)/\d+', parts.path.rstrip('/')))
         allowed = allowed or (parts.hostname == 'v3bl.goszakup.gov.kz' and re.fullmatch(
             r'/files/download_file/\d+/\d+/?', parts.path))

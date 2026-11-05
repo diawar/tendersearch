@@ -56,6 +56,8 @@ class MedicalTests(TestCase):
         self.assertNotEqual(lot_identity(direct), lot_identity(row(system_id=3)))
 
     def test_profile_checkbox_roundtrip_and_off_by_default(self):
+        from .models import TelegramSubscription
+        TelegramSubscription.objects.create(owner=self.owner, enabled=True, chat_id=self.owner.pk)
         data = {'terms':'flash','mode':'any','kind':'contains','number_kind':'lot_number','action':'save'}
         self.assertFalse(SearchForm()['only_medical'].value())
         self.client.force_login(self.owner)

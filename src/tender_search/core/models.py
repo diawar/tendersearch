@@ -135,6 +135,17 @@ class SearchProfile(Timestamped):
     monitor_lease = models.CharField(max_length=64, blank=True)
     monitor_lease_until = models.DateTimeField(null=True, blank=True)
     monitor_error = models.TextField(blank=True)
+    collection_enabled = models.BooleanField(default=True)
+    collection_revision = models.PositiveIntegerField(default=1)
+    collection_updated_at = models.DateTimeField(null=True, blank=True)
+    collection_next_at = models.DateTimeField(null=True, blank=True)
+    collection_lease = models.CharField(max_length=64, blank=True)
+    collection_lease_until = models.DateTimeField(null=True, blank=True)
+    collection_error = models.CharField(max_length=300, blank=True)
+
+    @property
+    def collection_hours(self):
+        return min(12, max(1, (self.interval_minutes + 59)//60))
 
     @property
     def interval_hours(self):
@@ -142,6 +153,34 @@ class SearchProfile(Timestamped):
 
     def __str__(self):
         return self.name
+
+
+class CollectionLot(Timestamped):
+    STAGES = [('new', 'Сохранён в подборку'), ('interesting', 'Интересные лоты'), ('applied', 'Подали заявку'),
+              ('won', 'Выиграли'), ('lost', 'Проиграли'), ('not_participated', 'Не участвовали'), ('contract', 'Заключение договора'), ('delivery', 'Поставка'), ('payment', 'Оплата')]
+    OUTCOMES = [('', 'Решение не указано'), ('won', 'Выиграли'), ('lost', 'Не выиграли')]
+    profile = models.ForeignKey(SearchProfile, on_delete=models.CASCADE, related_name='collection_lots')
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
+    stage = models.CharField(max_length=20, choices=STAGES, default='new')
+    outcome = models.CharField(max_length=10, choices=OUTCOMES, blank=True)
+    expired_from_stage = models.CharField(max_length=20, blank=True)
+    result_tracking = models.BooleanField(default=False)
+    matches_filter = models.BooleanField(default=True)
+    last_seen_at = models.DateTimeField(default=timezone.now)
+    terms = models.JSONField(default=list)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['profile', 'lot'], name='unique_collection_lot')]
+        indexes = [models.Index(fields=['profile', 'stage'], name='idx_collection_stage')]
+
+
+class UserLotNote(Timestamped):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
+    text = models.TextField(blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['owner', 'lot'], name='unique_user_lot_note')]
 
 
 class SearchRun(Timestamped):
@@ -464,3 +503,80 @@ class StatusDelivery(Timestamped):
     error = models.CharField(max_length=200, blank=True)
     retry_at = models.DateTimeField(null=True, blank=True)
     message_id = models.BigIntegerField(null=True, blank=True)
+
+
+class TelegramContact(models.Model):
+    chat_id = models.BigIntegerField(primary_key=True)
+    username = models.CharField(max_length=64, blank=True)
+    first_name = models.CharField(max_length=255, blank=True)
+    last_name = models.CharField(max_length=255, blank=True)
+    enabled = models.BooleanField(default=True)
+    first_seen_at = models.DateTimeField(null=True, blank=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+
+
+class UserLotPrice(Timestamped):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
+    unit_gross = models.DecimalField(max_digits=22, decimal_places=2)
+    locked_at = models.DateTimeField(null=True, blank=True)
+    vat_rate = models.DecimalField(max_digits=5, decimal_places=2, default=16)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['owner', 'lot'], name='unique_user_lot_price'),
+            models.CheckConstraint(condition=models.Q(unit_gross__gt=0), name='positive_user_lot_price'),
+            models.CheckConstraint(condition=models.Q(vat_rate__in=[0,5,12,16]), name='supported_user_vat_rate')]
+
+
+class CompanySettings(Timestamped):
+    owner = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    company_bin = models.CharField(max_length=12, blank=True)
+
+
+class LotOutcomeWatch(Timestamped):
+    STATES = [('pending','Ожидаем публикации итогов'), ('won','Выиграли'), ('lost','Не выиграли'),
+              ('review','Итоги требуют проверки'), ('not_listed','БИН не найден среди участников'),
+              ('cancelled','Закупка отменена'), ('unsuccessful','Закупка не состоялась'),
+              ('unsupported','Источник итогов не подтверждён'), ('no_bin','Укажите БИН компании')]
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
+    enabled = models.BooleanField(default=True)
+    company_bin = models.CharField(max_length=12, blank=True)
+    generation = models.CharField(max_length=64, default=uuid.uuid4)
+    state = models.CharField(max_length=20, choices=STATES, default='pending')
+    winner_bin = models.CharField(max_length=12, blank=True)
+    winner_name = models.CharField(max_length=500, blank=True)
+    protocol_url = models.URLField(max_length=500, blank=True)
+    fingerprint = models.CharField(max_length=64, blank=True)
+    revision = models.PositiveIntegerField(default=0)
+    applied_at = models.DateTimeField(default=timezone.now)
+    checked_at = models.DateTimeField(null=True, blank=True)
+    next_check_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    lease = models.CharField(max_length=64, blank=True)
+    lease_until = models.DateTimeField(null=True, blank=True)
+    error = models.CharField(max_length=300, blank=True)
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['owner','lot'], name='unique_owner_lot_outcome')]
+
+
+class OutcomeDelivery(Timestamped):
+    watch = models.ForeignKey(LotOutcomeWatch, on_delete=models.CASCADE)
+    generation = models.CharField(max_length=64)
+    revision = models.PositiveIntegerField(default=0)
+    event_key = models.CharField(max_length=150, unique=True)
+    payload = models.JSONField(default=dict)
+    state = models.CharField(max_length=20, default='pending')
+    message_id = models.BigIntegerField(null=True, blank=True)
+    retry_at = models.DateTimeField(null=True, blank=True)
+    error = models.CharField(max_length=200, blank=True)
+
+
+class LotSpecification(Timestamped):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
+    state = models.CharField(max_length=20, default='queued')
+    generation = models.CharField(max_length=64, blank=True)
+    documents = models.JSONField(default=list)
+    error = models.CharField(max_length=300, blank=True)
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['owner','lot'], name='unique_owner_lot_specification')]

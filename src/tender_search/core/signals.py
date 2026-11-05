@@ -22,6 +22,8 @@ def stop_watch_when_removed(sender,instance,**kwargs):
 @receiver(post_save,sender=Favorite)
 def download_when_favorited(sender,instance,created,**kwargs):
     if created:
+        from .models import CollectionLot
+        CollectionLot.objects.filter(profile__owner_id=instance.owner_id,lot_id=instance.lot_id,stage='new').update(stage='interesting')
         from .document_service import queue_documents
         lot_id = instance.lot_id
         transaction.on_commit(lambda: queue_documents(lot_id))

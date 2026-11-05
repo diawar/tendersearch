@@ -1,9 +1,9 @@
 # Инструкция ИИ-агенту: установка и обновление «Госзакупки» из GitHub
 
-Дата проверки: 2 ноября 2026 года.
+Дата актуализации: 5 ноября 2026 года.
 Репозиторий: https://github.com/diawar/tendersearch
 Ветка: `main` (нижний регистр).
-Проверенная версия приложения: `3cc3235b8eee9b949e8475a66b85fcd464037f40`.
+Для уже распакованной или установленной версии используй [ТЗ по обновлению](AGENT_UPDATE.md). Перед обновлением зафиксируй фактический SHA `origin/main`; приведённые ниже общие шаги сверяй с этим коммитом.
 
 ## 1. Задание агенту
 
@@ -115,7 +115,7 @@ docker compose config --quiet
 docker compose build web
 docker compose up -d --wait db redis
 docker compose run --rm --no-deps initialize
-docker compose up -d --no-deps --wait web worker search-worker indexer detail-indexer medical-indexer telegram
+docker compose up -d --no-deps --wait web worker search-worker indexer detail-indexer collection-monitor medical-indexer telegram
 docker compose exec -T web python manage.py sync_references
 docker compose exec -T web python manage.py sync_cities
 ```
@@ -168,7 +168,7 @@ docker compose -f compose.yaml -f data/compose.production.yaml up -d --no-deps -
 После изменения окружения пересоздай службы, которым основной Compose передаёт токен:
 
 ```text
-docker compose up -d --no-deps web worker search-worker indexer detail-indexer medical-indexer telegram
+docker compose up -d --no-deps web worker search-worker indexer detail-indexer collection-monitor medical-indexer telegram
 ```
 
 При наличии production override используй и его. Для независимой установки нужен отдельный бот. При переносе одного бота останови старый `telegram`, прежде чем запускать новый: два процесса не должны одновременно получать обновления одного бота.
@@ -182,7 +182,7 @@ docker compose up -d --no-deps web worker search-worker indexer detail-indexer m
 Сначала останови все процессы приложения, которые могут менять данные. БД и Redis оставь работающими:
 
 ```text
-docker compose stop -t 120 web worker search-worker indexer detail-indexer medical-indexer telegram
+docker compose stop -t 120 web worker search-worker indexer detail-indexer collection-monitor medical-indexer telegram
 ```
 
 Если есть `tunnel-web`, старый `lead-collector`, дополнительные workers или другие контейнеры этого проекта, останови и их с фактическими Compose-файлами. Ограничь внешний доступ на время обслуживания.
@@ -241,7 +241,7 @@ docker compose run --rm --no-deps web python manage.py backfill_search_projectio
 7. Пересоздай службы на новом образе с теми же Compose-файлами, проектом и томами:
 
 ```text
-docker compose up -d --no-deps --wait web worker search-worker indexer detail-indexer medical-indexer telegram
+docker compose up -d --no-deps --wait web worker search-worker indexer detail-indexer collection-monitor medical-indexer telegram
 docker compose exec -T web python manage.py check
 docker compose exec -T web python manage.py showmigrations --plan
 ```
@@ -290,7 +290,7 @@ docker compose ps -a
 docker compose exec -T web python manage.py check
 docker compose exec -T web python manage.py migrate --check
 docker compose exec -T worker celery -A tender_search.web inspect ping --timeout 10
-docker compose logs --tail 50 web search-worker worker indexer detail-indexer medical-indexer
+docker compose logs --tail 50 web search-worker worker indexer detail-indexer collection-monitor medical-indexer
 ```
 
 Просматривай журналы локально; перед передачей фрагментов исключи секреты и персональные данные. Не включай в отчёт токен из URL Telegram-запроса.
@@ -333,7 +333,7 @@ docker compose exec -T web python -c "import urllib.request; print(urllib.reques
 
 - URL приложения и установленный SHA коммита.
 - Имя Compose-проекта и каталог установки.
-- Состояние web, обоих workers, indexer, detail-indexer, medical-indexer, PostgreSQL и Redis.
+- Состояние web, обоих workers, indexer, detail-indexer, collection-monitor, medical-indexer, PostgreSQL и Redis.
 - Результат миграций и основных проверок.
 - Началась ли загрузка базы или завершён текущий обход.
 - Подключён ли Telegram; без отправки самовольных уведомлений.

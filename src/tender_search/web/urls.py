@@ -1,3 +1,4 @@
+from tender_search.core import collection_views
 from django.contrib import admin
 from django.contrib.auth import views as auth_views
 from django.urls import path, re_path
@@ -19,7 +20,12 @@ urlpatterns = [
     path("profiles/<int:profile_id>/delete/", views.profile_delete, name="profile_delete"),
     path("search/<uuid:job_id>/cancel/", views.search_cancel, name="search_cancel"),
     path("search/<uuid:job_id>/", views.search_results, name="search_results"),
+    path("lots/ui-state/", views.lot_ui_state, name="lot_ui_state"),
     path("lots/<int:lot_id>/", views.lot_detail, name="lot_detail"),
+    path("lots/<int:lot_id>/specification/", views.lot_specification_extract, name="lot_specification_extract"),
+    path("lots/<int:lot_id>/price/", views.lot_price_save, name="lot_price_save"),
+    path("lots/<int:lot_id>/application/cancel/", views.lot_application_cancel, name="lot_application_cancel"),
+    path("lots/<int:lot_id>/note/", views.lot_note_save, name="lot_note_save"),
     path("lots/<int:lot_id>/refresh/", views.lot_refresh, name="lot_refresh"),
     path("lots/<int:lot_id>/favorite/", views.favorite, name="favorite"),
     path("settings/", views.notification_settings, name="notification_settings"),
@@ -34,5 +40,9 @@ urlpatterns = [
     path("lots/<int:lot_id>/status-watch/", views.status_watch, name="status_watch"),
     path("lots/<int:lot_id>/documents/retry/", views.document_retry, name="document_retry"),
     path("lots/<int:lot_id>/documents/<int:version_id>/", views.document_download, name="document_download"),
+    path("collections/", collection_views.collections, name="collections"),
+    path("profiles/<int:profile_id>/tracking/", collection_views.tracking, name="profile_tracking"),
+    path("profiles/<int:profile_id>/refresh-collection/", collection_views.refresh, name="collection_refresh"),
+    path("collections/items/<int:item_id>/stage/", collection_views.move, name="collection_move"),
     path("favorites/", views.favorites, name="favorites"),
 ]

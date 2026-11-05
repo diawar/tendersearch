@@ -205,3 +205,26 @@ class UserAdministrationTests(TestCase):
         self.member.refresh_from_db()
         self.assertFalse(self.member.is_staff)
         self.assertFalse(self.member.is_superuser)
+
+    def test_telegram_subscribers_are_visible_only_to_admins(self):
+        from .models import TelegramContact,TelegramSubscription
+        TelegramContact.objects.create(chat_id=123456,username='telegram_member',first_name='<script>Имя</script>')
+        TelegramContact.objects.create(chat_id=654321,username='unlinked_visitor',enabled=False)
+        TelegramSubscription.objects.create(owner=self.member,chat_id=123456,enabled=True)
+        self.client.force_login(self.member)
+        self.assertEqual(self.client.get('/administration/').status_code,403)
+        for admin in (self.admin,self.other_admin):
+            self.client.force_login(admin)
+            page=self.client.get('/administration/')
+            self.assertContains(page,'Telegram nick')
+            self.assertContains(page,'Telegram name')
+            self.assertContains(page,'@telegram_member')
+            self.assertNotContains(page,'unlinked_visitor')
+            self.assertContains(page,'&lt;script&gt;Имя&lt;/script&gt;')
+            self.assertNotContains(page,'Подписчики Telegram')
+            accounts={user.username:user for user in page.context['users']}
+            self.assertEqual(accounts['member'].telegram_status,'Подключён')
+            self.assertEqual(accounts['member'].telegram_nick,'telegram_member')
+            self.assertEqual(accounts['admin'].telegram_status,'Не подключён')
+            self.assertEqual(accounts['admin'].telegram_nick,'')
+            self.assertNotIn('<section',__import__('bs4').BeautifulSoup(page.content,'html.parser').title.get_text())

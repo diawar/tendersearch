@@ -114,3 +114,10 @@ class SearchForm(forms.Form):
         return {"terms": data["terms"], "exclude": data["exclude"], "kind": data["kind"],
                 "mode": data["mode"], "backend": "local_index", "pages": 10, "auto_pages": False, "extended_descriptions": True, "filters": filters,
                 "customer_bin": data.get("customer_bin", ""), "regions": regions, "cities": cities, "defaults_version": 1, "status_selection": data.get("status", [])}
+
+
+class CompanySettingsForm(forms.Form):
+    company_bin = forms.RegexField(label='БИН компании', regex=r'^[0-9]{12}$', required=False,
+        max_length=12, min_length=12, widget=forms.TextInput(attrs={'inputmode':'numeric','autocomplete':'off','placeholder':'12 цифр'}),
+        error_messages={'invalid':'БИН должен содержать ровно 12 цифр.'},
+        help_text='Используется для сравнения с победителем лота в действующем протоколе итогов.')

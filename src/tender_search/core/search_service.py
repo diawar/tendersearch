@@ -265,9 +265,11 @@ def refresh_lot_data(lot_id, api):
             lot.description = extended_description(lot.raw, row) or lot.description
             lot.status = (row.get("status") or {}).get("name", lot.status)
             lot.amount = Decimal(str(row["total_price"])) if row.get("total_price") is not None else lot.amount
+            from .lot_pricing import pricing_detail_snapshot
+            lot.raw = dict(lot.raw, _pricing_detail=pricing_detail_snapshot(row))
             lot.checked_at = timezone.now()
             lot.refresh_state, lot.refresh_error = "done", ""
-            lot.save(update_fields=["name", "description", "status", "amount", "checked_at", "refresh_state", "refresh_error", "updated_at"])
+            lot.save(update_fields=["name", "description", "status", "amount", "raw", "checked_at", "refresh_state", "refresh_error", "updated_at"])
     except Exception as exc:
         logger.exception("Lot refresh failed: %s", lot_id)
         Lot.objects.filter(pk=lot_id).update(refresh_state="error", refresh_error=str(exc) if isinstance(exc, SourceError)

@@ -1,11 +1,11 @@
 <nav class="deadline-filters" aria-label="Быстрые фильтры по сроку подачи">
   <span>До окончания приёма</span>
   <a class="deadline-filter{% if not remaining_days %} active{% endif %}" {% if not remaining_days %}aria-current="true"{% endif %}
-     href="?remaining=#search-results" hx-get="?remaining=" hx-target="#search-results" hx-swap="outerHTML" hx-push-url="?remaining=#search-results">Все сроки</a>
+     href="?remaining={% if result_sort %}&amp;sort={{ result_sort }}{% endif %}#search-results" hx-get="?remaining={% if result_sort %}&amp;sort={{ result_sort }}{% endif %}" hx-target="#search-results" hx-swap="outerHTML" hx-push-url="?remaining={% if result_sort %}&amp;sort={{ result_sort }}{% endif %}#search-results">Все сроки</a>
   <a class="deadline-filter{% if remaining_days == '2' %} active{% endif %}" {% if remaining_days == '2' %}aria-current="true"{% endif %}
-     href="?remaining=2#search-results" hx-get="?remaining=2" hx-target="#search-results" hx-swap="outerHTML" hx-push-url="?remaining=2#search-results"
+     href="?remaining=2{% if result_sort %}&amp;sort={{ result_sort }}{% endif %}#search-results" hx-get="?remaining=2{% if result_sort %}&amp;sort={{ result_sort }}{% endif %}" hx-target="#search-results" hx-swap="outerHTML" hx-push-url="?remaining=2{% if result_sort %}&amp;sort={{ result_sort }}{% endif %}#search-results"
      title="До окончания подачи заявок осталось не больше 48 часов">До 48 часов</a>
   <a class="deadline-filter{% if remaining_days == '1' %} active{% endif %}" {% if remaining_days == '1' %}aria-current="true"{% endif %}
-     href="?remaining=1#search-results" hx-get="?remaining=1" hx-target="#search-results" hx-swap="outerHTML" hx-push-url="?remaining=1#search-results"
+     href="?remaining=1{% if result_sort %}&amp;sort={{ result_sort }}{% endif %}#search-results" hx-get="?remaining=1{% if result_sort %}&amp;sort={{ result_sort }}{% endif %}" hx-target="#search-results" hx-swap="outerHTML" hx-push-url="?remaining=1{% if result_sort %}&amp;sort={{ result_sort }}{% endif %}#search-results"
      title="До окончания подачи заявок осталось не больше 24 часов">До 24 часов</a>
 </nav>

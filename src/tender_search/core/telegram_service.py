@@ -9,7 +9,7 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from tender_search.client import ZakupClient, SourceError
-from .models import TelegramSubscription, TelegramCursor, TelegramDelivery, TelegramSeen, SearchProfile, WebSearch
+from .models import TelegramSubscription, TelegramCursor, TelegramDelivery, TelegramSeen, SearchProfile, WebSearch, TelegramContact
 from .source import RedisGate
 
 ALMATY = ZoneInfo('Asia/Almaty')
@@ -47,12 +47,37 @@ def connection_link(owner):
     subscription.save(update_fields=['link_hash', 'link_expires_at', 'updated_at'])
     return f'https://t.me/{settings.TELEGRAM_BOT_USERNAME}?start={token}'
 
+def record_contact(chat, text=None):
+    import re
+    if chat.get('type') != 'private' or not isinstance(chat.get('id'), int) or isinstance(chat['id'], bool):
+        return
+    now = timezone.now()
+    username = chat.get('username') or ''
+    if not isinstance(username, str) or not re.fullmatch(r'[A-Za-z0-9_]{1,64}', username):
+        username = ''
+    values = {'username': username, 'first_name': str(chat.get('first_name') or '')[:255],
+              'last_name': str(chat.get('last_name') or '')[:255]}
+    if text is not None:
+        values['last_seen_at'] = now
+        if text == '/stop':
+            values['enabled'] = False
+        elif text == '/start' or text.startswith('/start '):
+            values['enabled'] = True
+    contact, created = TelegramContact.objects.get_or_create(chat_id=chat['id'],
+        defaults=dict(values, first_seen_at=now if text is not None else None))
+    if not created:
+        if text is not None and contact.first_seen_at is None:
+            values['first_seen_at'] = now
+        TelegramContact.objects.filter(pk=contact.pk).update(**values)
+
+
 def handle_update(update):
     message = update.get('message') or {}
     chat = message.get('chat') or {}
     if chat.get('type') != 'private' or not isinstance(chat.get('id'), int):
         return
     text = message.get('text', '').strip()
+    record_contact(chat, text)
     if text == '/stop':
         TelegramSubscription.objects.filter(chat_id=chat['id']).update(enabled=False)
         return

@@ -91,6 +91,8 @@ class IndexTests(TestCase):
         self.assertEqual(set(job.hits.values_list('lot__source_id', flat=True)), {1, 2})
 
     def test_advance_checkbox_profile_and_result_roundtrip(self):
+        from .models import TelegramSubscription
+        TelegramSubscription.objects.create(owner=self.owner, enabled=True, chat_id=self.owner.pk)
         data = {'terms': 'flash', 'mode': 'any', 'kind': 'contains', 'number_kind': 'lot_number'}
         form = SearchForm(data)
         self.assertTrue(form.is_valid(), form.errors)

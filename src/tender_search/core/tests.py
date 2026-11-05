@@ -242,6 +242,8 @@ class PersonalSearchSettingsTests(TestCase):
         self.client.force_login(self.owner)
 
     def test_saved_filters_roundtrip_and_owner_isolation(self):
+        from .models import TelegramSubscription
+        TelegramSubscription.objects.create(owner=self.owner, enabled=True, chat_id=self.owner.pk)
         data = {"terms": "телефон; смартфон", "exclude": "ремонт", "mode": "all", "kind": "word",
                 "pages": "2", "number_kind": "lot_number", "amount_min": "5000", "action": "save", "profile_name": "Связь"}
         with patch("tender_search.core.tasks.web_search.delay") as publish:
@@ -298,6 +300,8 @@ class DeliveryFilterTests(TestCase):
         self.assertEqual(form.specification()["filters"]["delivery_address_id__in"], "11__20")
         user=get_user_model().objects.create_user("regions")
         self.client.force_login(user)
+        from .models import TelegramSubscription
+        TelegramSubscription.objects.create(owner=user, enabled=True, chat_id=user.pk)
         self.client.post("/search/", dict(data, action="save"))
         profile=SearchProfile.objects.get(owner=user)
         self.assertEqual(profile.filters["form"]["region"], ["10","20"])
@@ -360,6 +364,8 @@ class ProfileSearchStateTests(TestCase):
     def test_search_keeps_saved_state_until_conditions_change(self):
         owner=get_user_model().objects.create_user("profile-state")
         self.client.force_login(owner)
+        from .models import TelegramSubscription
+        TelegramSubscription.objects.create(owner=owner, enabled=True, chat_id=owner.pk)
         data={"terms":"сайт","exclude":"ремонт","mode":"any","kind":"contains","pages":"1","number_kind":"lot_number"}
         self.client.post("/search/",dict(data,action="save"))
         profile=SearchProfile.objects.get(owner=owner)

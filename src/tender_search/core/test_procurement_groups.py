@@ -52,6 +52,8 @@ class ProcurementGroupingTests(TestCase):
         self.assertEqual(groups['Организованные электронные торги'],{15})
         self.assertEqual(groups['Централизованные торги электрической энергией'],{64})
     def test_method_profile_restores_exact_ids_after_regrouping(self):
+        from .models import TelegramSubscription
+        TelegramSubscription.objects.create(owner=self.owner, enabled=True, chat_id=self.owner.pk)
         data=dict(self.data(),method=['12','33','11'],action='save')
         self.client.post('/search/',data)
         profile=SearchProfile.objects.get(owner=self.owner)
@@ -60,6 +62,8 @@ class ProcurementGroupingTests(TestCase):
             self.assertContains(response,f'name="method" value="{identifier}" checked')
         self.assertEqual(profile.filters['specification']['filters']['purchase_method_id__in'],'12__33__11')
     def test_tokens_expand_and_profile_remains_stable(self):
+        from .models import TelegramSubscription
+        TelegramSubscription.objects.create(owner=self.owner, enabled=True, chat_id=self.owner.pk)
         form=SearchForm(self.data())
         self.assertTrue(form.is_valid(),form.errors)
         spec=form.specification()

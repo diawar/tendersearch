@@ -127,3 +127,36 @@ class TelegramTests(TestCase):
             self.client.post(url,{'hours':invalid,'action':'interval'})
             self.profile.refresh_from_db()
             self.assertEqual(self.profile.interval_minutes,720)
+
+    def test_contacts_include_unlinked_starts_and_preserve_stop_status(self):
+        from .models import TelegramContact
+        chat={'id':6789,'type':'private','username':'subscriber_test','first_name':'Тест','last_name':'Подписчик'}
+        handle_update({'message':{'chat':chat,'text':'/start'}})
+        contact=TelegramContact.objects.get(chat_id=6789)
+        self.assertEqual(contact.username,'subscriber_test')
+        self.assertTrue(contact.enabled)
+        self.assertTrue(contact.first_seen_at)
+        self.assertFalse(TelegramSubscription.objects.filter(chat_id=6789).exists())
+        handle_update({'message':{'chat':chat,'text':'/stop'}})
+        handle_update({'message':{'chat':dict(chat,username='new_name'),'text':'Привет'}})
+        contact.refresh_from_db()
+        self.assertFalse(contact.enabled)
+        self.assertEqual(contact.username,'new_name')
+        handle_update({'message':{'chat':chat,'text':'/start'}})
+        contact.refresh_from_db();self.assertTrue(contact.enabled)
+        handle_update({'message':{'chat':{'id':9999,'type':'group'},'text':'/start'}})
+        self.assertEqual(TelegramContact.objects.count(),1)
+
+    def test_legacy_contact_gets_first_seen_on_actual_message_only(self):
+        from .models import TelegramContact
+        from .telegram_service import record_contact
+        TelegramContact.objects.create(chat_id=6789,enabled=False)
+        chat={'id':6789,'type':'private','username':'legacy_user'}
+        record_contact(chat)
+        contact=TelegramContact.objects.get(pk=6789)
+        self.assertFalse(contact.enabled)
+        self.assertIsNone(contact.first_seen_at)
+        handle_update({'message':{'chat':chat,'text':'/start'}})
+        contact.refresh_from_db()
+        self.assertTrue(contact.first_seen_at)
+        self.assertTrue(contact.enabled)
