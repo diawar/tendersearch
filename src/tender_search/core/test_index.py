@@ -7,6 +7,9 @@ from tender_search.client import AccessDenied, NotFound, Page, SourceError
 from .models import IndexedLot, ProcurementIndex, WebSearch, SearchProfile, TelegramSubscription, TelegramDelivery, ReferenceEntry
 from .index_service import collect_index_page, execute_local_search, index_coverage, claim_index
 from .forms import SearchForm
+from .detail_index import refresh_details
+from .models import AnnouncementRefresh
+from .test_announcement_index import announcement
 from .telegram_service import scan_profile
 
 
@@ -28,34 +31,21 @@ def put(data):
 
 @override_settings(STORAGES={'default':{'BACKEND':'django.core.files.storage.FileSystemStorage'},'staticfiles':{'BACKEND':'django.contrib.staticfiles.storage.StaticFilesStorage'}})
 class IndexTests(TestCase):
-    def test_missing_cards_are_excluded_and_never_requested_again(self):
+    def test_missing_cards_are_excluded_by_worker_without_blocking_registry(self):
         api = Mock()
-        api.search.side_effect = [Page(4, [row(1), row(2), row(3, announcement_id=101)], 'next'),
-                                  Page(4, [row(4, announcement_id=102)], None)]
-        api.announcement_lots.side_effect = [NotFound('HTTP 404'), [row(3)], [row(4)]]
-        self.assertTrue(collect_index_page(api))
-        state = ProcurementIndex.objects.get()
-        self.assertEqual(state.pending[0]['offset'], 1)
-        self.assertEqual(api.announcement_lots.call_count, 2)
-        self.assertTrue(collect_index_page(api))
-        self.finish_announcements(api)
-        state.refresh_from_db()
-        self.assertEqual(IndexedLot.objects.count(), 4)
-        self.assertEqual(index_coverage()['skipped'], 2)
-        self.assertEqual(index_coverage()['missing_details'], 0)
-        self.assertIsNotNone(state.completed_at)
-        self.assertEqual(state.error, '')
-        self.assertEqual(set(self.search().hits.values_list('lot__source_id', flat=True)), {3, 4})
-        self.assertTrue(self.search().complete)
-        state.next_run_at = timezone.now()-timedelta(seconds=1)
-        state.save()
-        api.search.side_effect = None
         api.search.return_value = Page(2, [row(1), row(2)], None)
-        api.announcement_lots.reset_mock()
-        api.announcement_lots.side_effect = AssertionError('Skipped cards must not be retried')
+        api.announcement.return_value = announcement()
+        api.announcement_lots.side_effect = NotFound('HTTP 404')
         self.assertTrue(collect_index_page(api))
         api.announcement_lots.assert_not_called()
-        self.assertEqual(IndexedLot.objects.filter(details_skipped=True, current=True).count(), 0)
+        self.finish_announcements(api)
+        self.assertFalse(index_coverage()['ready'])
+        self.assertTrue(refresh_details(api))
+        self.assertEqual(index_coverage()['skipped'], 2)
+        self.assertEqual(index_coverage()['loaded'], 0)
+        self.assertTrue(index_coverage()['ready'])
+        self.assertFalse(refresh_details(api))  # Bounded retry, not every registry pass.
+        api.announcement_lots.assert_called_once()
 
     def test_list_404_and_access_denial_still_preserve_cursor(self):
         api = Mock()
@@ -64,10 +54,13 @@ class IndexTests(TestCase):
         self.assertEqual(ProcurementIndex.objects.get().pending[0]['offset'], 0)
         api.search.side_effect = None
         api.search.return_value = Page(1, [row()], None)
+        api.announcement.return_value = announcement()
         api.announcement_lots.side_effect = AccessDenied('HTTP 403')
-        self.assertFalse(collect_index_page(api))
-        self.assertEqual(ProcurementIndex.objects.get().pending[0]['offset'], 0)
-        self.assertEqual(IndexedLot.objects.count(), 0)
+        self.assertTrue(collect_index_page(api))
+        self.assertFalse(refresh_details(api))
+        self.assertEqual(ProcurementIndex.objects.get().pending[0]['resource'], 'announcements')
+        self.assertEqual(IndexedLot.objects.count(), 1)
+        self.assertTrue(AnnouncementRefresh.objects.get().error)
 
     def test_missing_method_does_not_stop_collection(self):
         api = Mock()
@@ -214,8 +207,10 @@ class IndexTests(TestCase):
         self.assertFalse(collect_index_page(api))
         state.refresh_from_db();self.assertEqual(state.pending[0]['offset'],1)
         self.assertTrue(collect_index_page(api))
-        api.announcement_lots.assert_called_once_with(100)
+        api.announcement_lots.assert_not_called()
+        api.announcement.return_value = announcement()
         self.finish_announcements(api)
+        self.assertTrue(refresh_details(api))
         state.refresh_from_db();self.assertTrue(state.completed_at)
         stale.refresh_from_db();self.assertFalse(stale.current)
         self.assertIn('флешка',IndexedLot.objects.get(pk=1).row['description_ru'])
@@ -236,23 +231,28 @@ class IndexTests(TestCase):
         api.search.return_value=Page(1,[row()],None);api.announcement_lots.return_value=[]
         self.assertTrue(collect_index_page(api))
         self.finish_announcements(api)
+        api.announcement.return_value = announcement()
+        self.assertTrue(refresh_details(api))
         self.assertEqual(index_coverage()['loaded'],0)
         self.assertEqual(index_coverage()['skipped'],1)
         self.assertTrue(index_coverage()['ready'])
 
-    def test_empty_card_is_skipped_and_temporary_error_is_not(self):
-        api=Mock();api.search.return_value=Page(2,[row(1),row(2,announcement_id=101)],None)
-        api.announcement_lots.side_effect=[[],SourceError('temporary')]
-        self.assertFalse(collect_index_page(api))
-        state=ProcurementIndex.objects.get()
-        self.assertEqual(state.pending[0]['offset'],0)
-        self.assertIsNone(state.completed_at)
-        self.assertEqual(list(IndexedLot.objects.filter(details_skipped=True).values_list('source_id',flat=True)),[1])
-        api.announcement_lots.side_effect=[[row(2)]]
+    def test_empty_card_is_skipped_and_temporary_error_retries_separately(self):
+        api = Mock()
+        api.search.return_value = Page(2, [row(1), row(2, announcement_id=101)], None)
+        api.announcement.side_effect = lambda identifier: dict(announcement(), id=identifier)
+        api.announcement_lots.side_effect = [[], SourceError('temporary')]
         self.assertTrue(collect_index_page(api))
         self.finish_announcements(api)
+        self.assertTrue(refresh_details(api))
+        self.assertFalse(refresh_details(api))
+        self.assertEqual(list(IndexedLot.objects.filter(details_skipped=True).values_list('source_id', flat=True)), [1])
+        self.assertFalse(index_coverage()['ready'])
+        api.announcement_lots.side_effect = [[row(2)]]
+        AnnouncementRefresh.objects.filter(pk=101).update(due_at=timezone.now())
+        self.assertTrue(refresh_details(api))
         self.assertTrue(index_coverage()['ready'])
-        self.assertEqual(set(self.search().hits.values_list('lot__source_id',flat=True)),{2})
+        self.assertTrue(IndexedLot.objects.get(pk=2).current)
 
     def test_migration_excludes_existing_missing_cards_and_keeps_favorites(self):
         from importlib import import_module

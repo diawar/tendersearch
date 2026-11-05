@@ -265,6 +265,29 @@ class ProcurementIndex(models.Model):
     lease_until = models.DateTimeField(null=True)
     error = models.CharField(max_length=300, blank=True)
     paused = models.BooleanField(default=False)
+    pipeline_version = models.PositiveSmallIntegerField(default=2)
+
+
+class AnnouncementRefresh(models.Model):
+    """Durable, coalescing detail queue; one task per source announcement."""
+    source_id = models.BigIntegerField(primary_key=True)
+    announcement = models.JSONField(default=dict, blank=True)
+    registry_fingerprint = models.CharField(max_length=64, blank=True)
+    seen_cycle = models.CharField(max_length=64, blank=True, db_index=True)
+    active = models.BooleanField(default=True)
+    deadline = models.DateTimeField()
+    revision = models.PositiveIntegerField(default=1)
+    urgent = models.BooleanField(default=True)
+    due_at = models.DateTimeField(default=timezone.now)
+    checked_at = models.DateTimeField(null=True)
+    attempts = models.PositiveIntegerField(default=0)
+    error = models.CharField(max_length=300, blank=True)
+    lease = models.CharField(max_length=64, blank=True)
+    lease_until = models.DateTimeField(null=True)
+
+    class Meta:
+        indexes = [models.Index(fields=['due_at'], condition=models.Q(active=True),
+                               name='idx_announcement_refresh_due')]
 
 
 class MedicalIndexedLot(SearchProjection):

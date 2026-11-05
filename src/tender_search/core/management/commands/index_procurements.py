@@ -32,4 +32,5 @@ class Command(BaseCommand):
                 changed = False
             if options['once']:
                 return
-            time.sleep(1 if changed else 60)
+            if not changed:
+                time.sleep(60)

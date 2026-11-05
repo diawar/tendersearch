@@ -6,7 +6,8 @@ from django.utils import timezone
 from tender_search.client import Page, SourceError, NotFound
 from .announcement_index import announcement_lot_row
 from .index_service import collect_index_page, claim_index
-from .models import ProcurementIndex, IndexedLot, AnnouncementLotCache
+from .models import ProcurementIndex, IndexedLot, AnnouncementLotCache, AnnouncementRefresh
+from .detail_index import refresh_details
 from .search_service import extended_description, lot_identity
 
 
@@ -43,6 +44,7 @@ class AnnouncementIndexTests(TestCase):
         self.assertIsNone(ProcurementIndex.objects.get().completed_at)
         self.assertTrue(collect_index_page(api))
         self.assertIsNotNone(ProcurementIndex.objects.get().completed_at)
+        self.assertTrue(refresh_details(api))
         a, b = list(IndexedLot.objects.order_by('source_id'))
         self.assertIn('для мышки', a.row['description_ru'])
         self.assertEqual(a.row['system_id'], 1)  # Never replace the lot's platform with announcement EPZ.
@@ -64,13 +66,15 @@ class AnnouncementIndexTests(TestCase):
         api = Mock()
         api.search.return_value = Page(1, [announcement()], None)
         api.announcement_lots.side_effect = SourceError('Temporary failure')
-        self.assertFalse(collect_index_page(api))
+        self.assertTrue(collect_index_page(api))
+        self.assertFalse(refresh_details(api))
         state = ProcurementIndex.objects.get()
-        self.assertEqual(state.pending[0]['offset'], 0)
-        self.assertIsNone(state.completed_at)
+        self.assertEqual(state.pending, [])
+        self.assertIsNotNone(state.completed_at)
         api.announcement_lots.side_effect = None
         api.announcement_lots.return_value = [detail()]
-        self.assertTrue(collect_index_page(api))
+        AnnouncementRefresh.objects.update(due_at=timezone.now())
+        self.assertTrue(refresh_details(api))
         state.refresh_from_db()
         self.assertEqual(state.error, '')
         self.assertIsNotNone(state.completed_at)
@@ -103,6 +107,7 @@ class AnnouncementIndexTests(TestCase):
         api.search.return_value = Page(1, [announcement()], None)
         api.announcement_lots.return_value = [detail(1, 16), dict(detail(2), is_externally_deleted=True), detail(3)]
         self.assertTrue(collect_index_page(api))
+        self.assertTrue(refresh_details(api))
         self.assertEqual(list(IndexedLot.objects.filter(current=True).values_list('source_id', flat=True)), [3])
 
     def test_previous_cycle_cache_is_refreshed_and_404_does_not_block(self):
@@ -112,6 +117,7 @@ class AnnouncementIndexTests(TestCase):
         api.search.return_value = Page(1, [announcement()], None)
         api.announcement_lots.side_effect = NotFound('HTTP 404')
         self.assertTrue(collect_index_page(api))
+        self.assertTrue(refresh_details(api))
         self.assertFalse(IndexedLot.objects.exists())
         api.announcement_lots.assert_called_once_with(100)
 
@@ -127,14 +133,17 @@ class AnnouncementIndexTests(TestCase):
         api = Mock()
         api.search.side_effect = [Page(1, [row(50, announcement_id=200)], None),
                                 Page(1, [announcement()], None)]
-        api.announcement_lots.side_effect = [[row(50)], [detail()]]
+        api.announcement.side_effect = lambda identifier: dict(announcement(), id=identifier)
+        api.announcement_lots.side_effect = lambda identifier: [detail(50)] if identifier == 200 else [detail()]
         self.assertTrue(collect_index_page(api))
         old.refresh_from_db()
         self.assertTrue(old.current)  # The first registry cannot reconcile the whole index.
         self.assertTrue(collect_index_page(api))
+        self.assertTrue(refresh_details(api))
+        self.assertTrue(refresh_details(api))
         self.assertEqual(set(IndexedLot.objects.filter(current=True).values_list('source_id', flat=True)), {1, 50})
 
-    def test_permanently_skipped_ids_stay_skipped_in_announcement_traversal(self):
+    def test_skipped_ids_are_not_revived_by_registry_before_card_confirmation(self):
         from .test_index import row, put
         self.start_announcements()
         skipped = put(row(1))

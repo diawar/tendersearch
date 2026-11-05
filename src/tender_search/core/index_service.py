@@ -8,13 +8,12 @@ import json
 from django.db import transaction
 from django.utils import timezone
 
-from tender_search.client import NotFound, SourceError, utc_datetime
+from tender_search.client import SourceError, utc_datetime
 from tender_search.matching import match_lot, PreparedMatcher
-from .models import IndexedLot, ProcurementIndex, ReferenceEntry, WebSearch, SearchHit, AnnouncementLotCache
-from .announcement_index import announcement_lot_row
+from .models import IndexedLot, ProcurementIndex, ReferenceEntry, WebSearch, SearchHit, AnnouncementRefresh
 from .procurement_groups import status_matches
 from .advances import has_advance
-from .search_service import announcement_details, extended_description, lot_identity, store_lot, store_search_hits
+from .search_service import extended_description, lot_identity, store_lot, store_search_hits
 
 ACTIVE_STATUSES = {6, 7, 9}
 PAGE_SIZE = 100
@@ -62,6 +61,8 @@ def index_coverage():
     state = ProcurementIndex.objects.filter(pk=1).first()
     count = IndexedLot.objects.filter(current=True, deadline__gt=now).count()
     missing = incomplete_rows().count()
+    detail_tasks = AnnouncementRefresh.objects.filter(active=True, deadline__gt=now)
+    urgent = detail_tasks.filter(urgent=True).count()
     fresh = bool(state and state.completed_at and state.completed_at >= now-timedelta(hours=6))
     elapsed = None
     if state and state.started_at:
@@ -75,7 +76,9 @@ def index_coverage():
             'completed_at': state.completed_at.isoformat() if state and state.completed_at else None,
             'heartbeat_at': state.heartbeat_at.isoformat() if state and state.heartbeat_at else None,
             'building': bool(state and state.pending), 'missing_details': missing,
-            'ready': fresh and not state.error and not state.paused and not missing if state else False,
+            'detail_urgent': urgent, 'detail_due': detail_tasks.filter(due_at__lte=now).count(),
+            'detail_errors': detail_tasks.exclude(error='').count(),
+            'ready': fresh and not state.error and not state.paused and not missing and not urgent if state else False,
             'paused': bool(state and state.paused), 'error': state.error if state else '',
             'available': bool(state)}
 
@@ -87,6 +90,11 @@ def claim_index():
         state = ProcurementIndex.objects.select_for_update().get(pk=1)
         if state.paused or (state.lease_until and state.lease_until > now):
             return None
+        if state.pipeline_version < 2:
+            # The old cursor skipped detail work implicitly: start a full fast sweep.
+            state.pending = []
+            state.next_run_at = None
+            state.pipeline_version = 2
         if not state.pending:
             if state.next_run_at and state.next_run_at > now:
                 return None
@@ -109,148 +117,8 @@ def claim_index():
 
 
 def collect_index_page(api):
-    """Commit cursor only after the whole page. A failed page is safe to replay."""
-    state = claim_index()
-    if state is None:
-        return False
-    try:
-        window = state.pending[0]
-        resource = window['resource']
-        params = {'status_id__in': '6__7__9', 'offer_end_date__gte': window['lo'],
-                  'limit': PAGE_SIZE, 'offset': window['offset'], 'ordering': '-publish_date'}
-        if window['hi']:
-            params['offer_end_date__lte'] = window['hi']
-        page = api.search(**params) if resource == 'lots' else api.search('announcements', **params)
-        lo, hi = date_value(window['lo']), date_value(window['hi'])
-        # Verify that the source actually applied the partition; ignored filters
-        # must never turn into a false claim of complete coverage.
-        for row in page.results:
-            end = utc_datetime(row.get('offer_end_date'))
-            status = row.get('status_id') if resource == 'announcements' else (row.get('status') or {}).get('id')
-            if not end or end < lo or (hi and end > hi) or status not in ACTIVE_STATUSES:
-                raise SourceError('Источник не подтвердил фильтры активной базы. Сбор приостановлен до повторной проверки.')
-        if resource == 'lots' and window['offset'] == 0 and not window['hi'] and window['lo'] == state.started_at.isoformat():
-            state.source_count = page.count
-        if page.count > 9000:
-            end = hi or lo+timedelta(days=2)
-            if end-lo < timedelta(seconds=1):
-                raise SourceError('Слишком много лотов с одним сроком; требуется дополнительное разбиение индекса.')
-            middle = (lo+(end-lo)/2).isoformat()
-            state.pending[:1] = [{'resource': resource, 'lo': window['lo'], 'hi': middle, 'offset': 0},
-                                 {'resource': resource, 'lo': middle, 'hi': window['hi'], 'offset': 0}]
-        else:
-            details_cache = {}
-            unavailable_announcements = set()
-            refreshed_announcements = set()
-            old_fingerprints = dict(IndexedLot.objects.filter(
-                source_id__in=[row['id'] for row in page.results]
-            ).values_list('source_id', 'registry_fingerprint')) if resource == 'lots' else {}
-            cycle_cards = set(AnnouncementLotCache.objects.filter(
-                source_id__in=[row['announcement_id'] for row in page.results],
-                checked_at__gte=max(state.started_at, timezone.now()-DETAIL_MAX_AGE)
-            ).values_list('source_id', flat=True)) if resource == 'lots' else set()
-            skipped_ids = set(IndexedLot.objects.filter(
-                details_skipped=True, source_id__in=[row['id'] for row in page.results]
-            ).values_list('source_id', flat=True))
-            for row in page.results:
-                if not ProcurementIndex.objects.filter(pk=1, lease=state.lease, paused=False).exists():
-                    return False
-                if resource == 'announcements':
-                    collect_announcement(api, row, state)
-                    ProcurementIndex.objects.filter(pk=1, lease=state.lease).update(
-                        heartbeat_at=timezone.now(), lease_until=timezone.now()+timedelta(minutes=30))
-                    continue
-                if row['id'] in skipped_ids:
-                    continue
-                detail = None
-                fingerprint = registry_fingerprint(row)
-                if row['announcement_id'] not in unavailable_announcements:
-                    try:
-                        changed = old_fingerprints.get(row['id']) != fingerprint
-                        force = (changed and row['announcement_id'] not in refreshed_announcements
-                                 and (old_fingerprints.get(row['id']) or row['announcement_id'] not in cycle_cards))
-                        if force:
-                            details_cache.pop(row['announcement_id'], None)
-                        detail = announcement_details(api, row['announcement_id'], details_cache, row['id'],
-                            max_age=timedelta(0) if force else DETAIL_MAX_AGE).get(row['id'])
-                        if force:
-                            refreshed_announcements.add(row['announcement_id'])
-                    except NotFound:
-                        # Permanently skip only missing cards, not source outages.
-                        unavailable_announcements.add(row['announcement_id'])
-                save_index_row(row, detail, state.cycle, fingerprint)
-                ProcurementIndex.objects.filter(pk=1, lease=state.lease).update(
-                    heartbeat_at=timezone.now(), lease_until=timezone.now()+timedelta(minutes=30))
-            state.processed += len(page.results)
-            if page.next_url:
-                if not page.results:
-                    raise SourceError('Источник вернул пустую страницу с продолжением.')
-                window['offset'] += max(1, len(page.results)-PAGE_OVERLAP)
-                if window['offset']+PAGE_SIZE > 10000:
-                    raise SourceError('Окно источника изменилось во время обхода; требуется повторное разбиение.')
-            else:
-                state.pending.pop(0)
-            if not state.pending:
-                # Retain rows for diagnostics, but do not advertise disappeared
-                # or cancelled procurements as current after a full sweep.
-                IndexedLot.objects.filter(current=True).exclude(seen_cycle=state.cycle).update(current=False)
-                if not incomplete_rows().exists():
-                    state.completed_at = timezone.now()
-                state.next_run_at = timezone.now()+timedelta(minutes=15)
-        ProcurementIndex.objects.filter(pk=1, lease=state.lease).update(
-            pending=state.pending, processed=state.processed, source_count=state.source_count,
-            completed_at=state.completed_at, next_run_at=state.next_run_at,
-            error='', heartbeat_at=timezone.now())
-        return True
-    except Exception as exc:
-        ProcurementIndex.objects.filter(pk=1, lease=state.lease).update(
-            error=str(exc)[:300] if isinstance(exc, SourceError) else 'Ошибка обновления индекса. Повторим страницу.',
-            heartbeat_at=timezone.now())
-        return False
-    finally:
-        ProcurementIndex.objects.filter(pk=1, lease=state.lease).update(lease='', lease_until=None)
-
-
-def collect_announcement(api, announcement, state):
-    """Read every lot, including those omitted by the separate lot registry.
-
-    Unchanged registry entries reuse recent cards across cycles. A bounded TTL
-    also checks changes to specifications that are not exposed in the registry.
-    """
-    fingerprint = registry_fingerprint(announcement)
-    cached = AnnouncementLotCache.objects.filter(source_id=announcement['id']).first()
-    reusable = bool(cached and cached.checked_at >= timezone.now()-DETAIL_MAX_AGE and (
-        cached.registry_fingerprint == fingerprint or (
-            not cached.registry_fingerprint and cached.checked_at >= state.started_at)))
-    if reusable:
-        details = cached.rows
-        if cached.registry_fingerprint != fingerprint:
-            AnnouncementLotCache.objects.filter(pk=cached.pk).update(registry_fingerprint=fingerprint)
-    else:
-        try:
-            details = api.announcement_lots(announcement['id'])
-        except NotFound:
-            # Disappeared announcement cards do not stop the remaining registry.
-            IndexedLot.objects.filter(announcement_source_id=announcement['id']).update(current=False)
-            return
-        AnnouncementLotCache.objects.update_or_create(source_id=announcement['id'], defaults={
-            'rows': details, 'checked_at': timezone.now(), 'registry_fingerprint': fingerprint})
-    # A card can lose individual lots while its announcement remains active.
-    IndexedLot.objects.filter(announcement_source_id=announcement['id']).exclude(
-        source_id__in=[d['id'] for d in details]).update(current=False)
-    skipped = set(IndexedLot.objects.filter(details_skipped=True,
-        source_id__in=[d['id'] for d in details]).values_list('source_id', flat=True))
-    for detail in details:
-        if not ProcurementIndex.objects.filter(pk=1, lease=state.lease, paused=False).exists():
-            raise SourceError('Обход объявлений приостановлен; страница будет повторена.')
-        if detail['id'] in skipped:
-            continue
-        row = announcement_lot_row(announcement, detail)
-        if (detail.get('is_externally_deleted') is True or row['status'].get('id') not in ACTIVE_STATUSES
-                or utc_datetime(row['offer_end_date']) <= timezone.now()):
-            IndexedLot.objects.filter(source_id=detail['id']).update(current=False, seen_cycle=state.cycle)
-            continue
-        save_index_row(row, detail, state.cycle)
+    from .registry_index import collect_registry_page
+    return collect_registry_page(api)
 
 
 def local_matches(row, spec, now, address_prefixes):

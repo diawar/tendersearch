@@ -14,6 +14,7 @@
 </ul>
 {% if user.is_staff %}<small>Активные закупки с неистёкшим сроком подачи. Обновление круглосуточно.</small>
 <details class="coverage-diagnostics"><summary>Состояние загрузки</summary>
+<div>Подробности: новых или изменённых объявлений в очереди — {{ index_coverage.detail_urgent }}; всего ожидают проверки — {{ index_coverage.detail_due }}; с ошибками и повтором — {{ index_coverage.detail_errors }}.</div>
 <div>Загружено {{ index_coverage.loaded }} лотов{% if index_coverage.source_count %} · последняя оценка ≈ {{ index_coverage.source_count }}{% endif %}. Медицинские закупки: {{ medical_coverage.loaded }}.</div>
 {% if index_coverage.skipped %}<div>Исключено лотов с недоступными описаниями: {{ index_coverage.skipped }}.</div>{% endif %}
 {% if index_coverage.error %}<div class="error">{{ index_coverage.error }}</div>{% endif %}
