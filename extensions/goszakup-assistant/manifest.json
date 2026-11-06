@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Госзакупки — помощник черновиков",
+  "version": "0.2.2",
+  "description": "Проверка формы и заполнение текстовых полей. Без подписания и подачи.",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

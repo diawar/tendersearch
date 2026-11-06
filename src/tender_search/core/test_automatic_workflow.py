@@ -179,7 +179,7 @@ class AutomaticWorkflowTests(TestCase):
         other_item=CollectionLot.objects.create(profile=other_profile,lot=self.lot,stage='applied',result_tracking=True)
         watch=self.run_check(Outcome('won',BIN,'Наша',protocol_url='https://v3bl.goszakup.gov.kz/files/download_file/1/1',fingerprint='a'*64))
         self.item.refresh_from_db();other_item.refresh_from_db()
-        self.assertEqual((self.item.stage,self.item.outcome),('won','won'))
+        self.assertEqual((self.item.stage,self.item.outcome),('contract','won'))
         self.assertEqual(other_item.stage,'applied')
         self.assertEqual(OutcomeDelivery.objects.filter(watch=watch).count(),1)
         LotOutcomeWatch.objects.filter(pk=watch.pk).update(lease='again')
@@ -193,7 +193,7 @@ class AutomaticWorkflowTests(TestCase):
         with patch('tender_search.core.outcome_service.source_client'),patch('tender_search.core.outcome_service.OutcomePortal') as portal:
             portal.return_value.outcome.return_value=Outcome('review')
             check_outcome(watch.pk,'review')
-        self.item.refresh_from_db();self.assertEqual(self.item.stage,'applied');self.assertEqual(self.item.outcome,'')
+        self.item.refresh_from_db();self.assertEqual(self.item.stage,'contract');self.assertEqual(self.item.outcome,'')
     def test_no_participant_match_is_not_a_loss_and_no_protocol_is_pending(self):
         self.run_check(Outcome('not_listed',OTHER,'Другая'))
         self.item.refresh_from_db();self.assertEqual(self.item.stage,'applied');self.assertEqual(self.item.outcome,'')
@@ -222,7 +222,7 @@ class AutomaticWorkflowTests(TestCase):
             schedule_outcomes();queued.assert_called_once()
     def test_expired_unsubmitted_move_and_reopen_without_touching_applied(self):
         self.lot.announcement.deadline=timezone.now()-timedelta(hours=1);self.lot.announcement.save()
-        move_closed_unsubmitted();self.item.refresh_from_db();self.assertEqual(self.item.stage,'not_participated')
+        move_closed_unsubmitted();self.item.refresh_from_db();self.assertEqual(self.item.stage,'interesting');self.assertTrue(self.item.result_tracking)
         self.lot.announcement.deadline=timezone.now()+timedelta(hours=1);self.lot.announcement.save()
         move_closed_unsubmitted();self.item.refresh_from_db();self.assertEqual(self.item.stage,'interesting')
         self.apply();self.lot.announcement.deadline=timezone.now()-timedelta(hours=1);self.lot.announcement.save()
@@ -252,7 +252,7 @@ class AutomaticWorkflowTests(TestCase):
         with patch('tender_search.core.outcome_service.source_client',side_effect=RuntimeError('network unavailable')):
             check_outcome(watch.pk,'failing')
         watch.refresh_from_db();self.item.refresh_from_db()
-        self.assertEqual(watch.state,'won');self.assertEqual(self.item.stage,'won')
+        self.assertEqual(watch.state,'won');self.assertEqual(self.item.stage,'contract')
         self.assertTrue(watch.error);self.assertEqual(watch.lease,'')
 
     def test_migration_keeps_existing_draft_price_and_personal_note(self):

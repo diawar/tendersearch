@@ -7,6 +7,31 @@ register = template.Library()
 
 
 @register.simple_tag
+def application_portal_status(lot):
+    item=getattr(lot,'preparation',None)
+    if not item:return ''
+    title={'draft':'Черновик создан','submitted':'Заявка подана'}.get(item.portal_state,'Данные подготовлены · черновик не подтверждён')
+    if item.portal_sync_error:title+=' · требуется проверка'
+    return format_html('<span class="badge" title="По последнему отчёту расширения; актуальность проверяйте в карточке заявки">{}</span>',title)
+
+
+@register.simple_tag
+def participation_warning(lot):
+    if lot.announcement.source != 'zakup':
+        return ''
+    raw = lot.raw or {}
+    system = raw.get('system') or (lot.announcement.raw or {}).get('system') or {}
+    system_id = str((system.get('id') if isinstance(system, dict) else system) or raw.get('system_id') or '')
+    if system_id and system_id != '1':
+        return ''
+    # Empty public flags do not prove eligibility. Do not infer permission or
+    # a specific national-regime restriction from a product name/code alone.
+    return format_html('<a class="participation-warning" href="{}" target="_blank" rel="noopener noreferrer" '
+        'title="Публичные данные не подтверждают допуск вашей компании. На портале проверьте ограничения национального режима и требования к реестрам поставщиков.">'
+        '⚠ Допуск требует проверки</a>', lot.portal_url)
+
+
+@register.simple_tag
 def procurement_source_badge(lot, all_platforms=False):
     if lot.announcement.source in ('med_ecc', 'fms_ecc'):
         return format_html('<span class="source-badge" title="Медицинская площадка">{}</span>', lot.portal_label)

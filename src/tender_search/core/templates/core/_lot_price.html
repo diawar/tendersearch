@@ -6,4 +6,5 @@
 {% if price_locked %}<button class="outline" type="button" disabled>Подали заявку</button>{% if price_can_cancel %}<form method="post" action="{% url 'lot_application_cancel' lot_id=lot.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ back_url }}"><button class="outline" type="submit">Отменить отметку</button></form>{% endif %}{% else %}<button class="outline" type="submit" form="lot-price-entry">Подать цену</button>{% endif %}
 <a class="outline" href="https://goszakup.gov.kz/" target="_blank" rel="noopener noreferrer">Госзакуп ↗</a>
 <a class="outline" href="{{ lot.portal_url }}" target="_blank" rel="noopener noreferrer">Объявление ↗</a>
+<a class="outline" href="{% url 'notification_settings' %}#chrome-extension">Расширение Chrome · установка</a>
 </div></section>

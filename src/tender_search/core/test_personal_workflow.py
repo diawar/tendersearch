@@ -90,4 +90,4 @@ class PersonalWorkflowTests(TestCase):
         self.assertFalse(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).keep_after_deadline)
         self.lot.announcement.deadline=timezone.now()-timedelta(seconds=1);self.lot.announcement.save()
         move_closed_unsubmitted()
-        self.item.refresh_from_db();self.assertEqual(self.item.stage,'not_participated')
+        self.item.refresh_from_db();self.assertEqual(self.item.stage,'interesting');self.assertTrue(self.item.result_tracking)

@@ -8,6 +8,8 @@ from tender_search.core.views import dashboard, health
 from tender_search.core import views
 from tender_search.core import lead_views
 from tender_search.core import user_admin
+from tender_search.core.extension_views import download_extension
+from tender_search.core.preparation import prepare_application, export_preparation, import_portal_status
 
 urlpatterns = [
     path("", dashboard, name="dashboard"),
@@ -22,6 +24,9 @@ urlpatterns = [
     path("search/<uuid:job_id>/", views.search_results, name="search_results"),
     path("lots/ui-state/", views.lot_ui_state, name="lot_ui_state"),
     path("lots/<int:lot_id>/", views.lot_detail, name="lot_detail"),
+    path("lots/<int:lot_id>/preparation/", prepare_application, name="application_preparation"),
+    path("lots/<int:lot_id>/preparation/export/", export_preparation, name="preparation_export"),
+    path("lots/<int:lot_id>/preparation/status/", import_portal_status, name="preparation_status"),
     path("lots/<int:lot_id>/specification/", views.lot_specification_extract, name="lot_specification_extract"),
     path("lots/<int:lot_id>/status/", views.lot_detail_status, name="lot_detail_status"),
     path("lots/<int:lot_id>/price/", views.lot_price_save, name="lot_price_save"),
@@ -30,6 +35,7 @@ urlpatterns = [
     path("lots/<int:lot_id>/refresh/", views.lot_refresh, name="lot_refresh"),
     path("lots/<int:lot_id>/favorite/", views.favorite, name="favorite"),
     path("settings/", views.notification_settings, name="notification_settings"),
+    path("settings/extension/download/", download_extension, name="download_extension"),
     path("administration/", user_admin.users, name="administration_users"),
     path("administration/users/<int:user_id>/edit/", user_admin.edit_user, name="administration_user_edit"),
     path("administration/users/<int:user_id>/delete/", user_admin.delete_user, name="administration_user_delete"),

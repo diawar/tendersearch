@@ -1,6 +1,7 @@
 {% load search_tags %}
 <section id="lot-detail" data-status-url="{% url 'lot_detail_status' lot_id=lot.pk %}" data-detail="{{ lot_revisions.detail }}" data-documents="{{ lot_revisions.documents }}" data-specification="{{ lot_revisions.specification }}" data-pending="{% if lot.refresh_state == 'running' or documents_pending or specification_pending %}true{% else %}false{% endif %}">
 {% include 'core/_lot_header.html' %}
+{% if lot.workflow.stage == 'interesting' or lot.has_preparation %}<section class="panel"><a class="outline" href="{% url 'application_preparation' lot_id=lot.pk %}">{% if lot.has_preparation %}Данные заявки{% else %}Подготовить заявку{% endif %}</a></section>{% endif %}
 {% if lot.workflow_actions %}<section class="panel"><h2>{{ lot.workflow.get_stage_display }}</h2>{% include 'core/_fulfillment_actions.html' %}</section>{% endif %}
 <div id="lot-price-region">{% if price_policy %}{% include 'core/_lot_price.html' %}{% endif %}</div>
 {% include 'core/_lot_specification.html' %}

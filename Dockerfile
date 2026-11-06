@@ -4,6 +4,7 @@ WORKDIR /app
 COPY pyproject.toml ./
 RUN python -c "import tomllib,subprocess,sys; subprocess.check_call([sys.executable,'-m','pip','install',*tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']])"
 COPY src ./src
+COPY extensions ./extensions
 COPY manage.py ./
 RUN pip install --no-deps . && DJANGO_SECRET_KEY=build-time-static-only TENDER_SQLITE=1 python manage.py collectstatic --noinput
 RUN useradd --create-home --uid 10001 app && mkdir -p /app/data && chown app:app /app/data

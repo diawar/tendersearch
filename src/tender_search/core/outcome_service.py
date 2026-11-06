@@ -12,7 +12,37 @@ from .source import source_client
 from .outcome_source import OutcomePortal, Outcome, ProtocolFormatError
 from .telegram_service import telegram_api, TelegramError
 
-TRACKED_STAGES = ('applied','won','lost','contract','delivery','payment')
+TRACKED_STAGES = ('interesting','applied','won','lost','contract','delivery','payment')
+
+
+def enroll_participation_checks():
+    from .models import UserLotWorkflow
+    from .workflow_state import update_workflow
+    now=timezone.now()
+    reopened=UserLotWorkflow.objects.filter(owner__is_active=True,stage='interesting',result_tracking=True,
+        lot__announcement__deadline__gt=now)
+    for pk in list(reopened.values_list('pk',flat=True)[:200]):
+        with transaction.atomic():
+            state=UserLotWorkflow.objects.filter(pk=pk).first()
+            if not state:continue
+            list(SearchProfile.objects.select_for_update().filter(owner_id=state.owner_id).order_by('pk'))
+            state=reopened.select_for_update().filter(pk=pk).first()
+            if not state:continue
+            update_workflow(state.owner_id,state.lot_id,result_tracking=False)
+            from .fulfillment import pause_outcome
+            pause_outcome(state.owner_id,state.lot_id)
+    candidates=UserLotWorkflow.objects.filter(owner__is_active=True).filter(
+        Q(stage='interesting',result_tracking=False,lot__announcement__deadline__lte=now) |
+        Q(stage='not_participated',expired_from_stage='interesting',lot__announcement__deadline__lte=now))
+    for pk in list(candidates.values_list('pk',flat=True)[:200]):
+        with transaction.atomic():
+            state=UserLotWorkflow.objects.filter(pk=pk).first()
+            if not state:continue
+            list(SearchProfile.objects.select_for_update().filter(owner_id=state.owner_id).order_by('pk'))
+            state=candidates.select_for_update().filter(pk=pk).first()
+            if not state:continue
+            update_workflow(state.owner_id,state.lot_id,stage='interesting',expired_from_stage='',result_tracking=True)
+            register_watch(state.owner_id,state.lot_id)
 
 
 def company_bin_for(owner_id):
@@ -67,6 +97,7 @@ def reset_company(owner_id, new_bin):
 def schedule_outcomes():
     from .tasks import check_lot_outcome
     now=timezone.now()
+    enroll_participation_checks()
     candidates=CollectionLot.objects.filter(result_tracking=True,stage__in=TRACKED_STAGES,profile__owner__is_active=True)
     candidates=candidates.annotate(has_watch=Exists(LotOutcomeWatch.objects.filter(owner_id=OuterRef('profile__owner_id'),lot_id=OuterRef('lot_id')))).filter(has_watch=False)
     for owner_id,lot_id in candidates.values_list('profile__owner_id','lot_id').distinct()[:100]:
@@ -127,6 +158,9 @@ def check_outcome(watch_id, lease):
                     result=OutcomePortal(api).outcome(snapshot.lot.announcement.external_id,snapshot.lot.announcement.number,snapshot.lot.number,snapshot.company_bin)
             except ProtocolFormatError as exc:
                 result=Outcome('review');result.error=str(exc)[:300]
+        if result.state=='not_listed' and not result.participants_complete:
+            result=Outcome('review',protocol_url=result.protocol_url,fingerprint=result.fingerprint)
+            result.error='Наш БИН не найден, но полнота списка участников не подтверждена. Требуется проверка.'
         with transaction.atomic():
             company=CompanySettings.objects.select_for_update().filter(owner_id=snapshot.owner_id).first()
             if (company.company_bin if company else '')!=snapshot.company_bin:return
@@ -134,6 +168,10 @@ def check_outcome(watch_id, lease):
             items=list(tracked_items(snapshot.owner_id,snapshot.lot_id).select_for_update())
             current=LotOutcomeWatch.objects.select_for_update().filter(pk=watch_id,enabled=True,lease=lease,generation=snapshot.generation).select_related('lot__announcement').first()
             if not current or not items:return
+            from .models import Announcement
+            if any(item.stage=='interesting' for item in items) and Announcement.objects.filter(
+                    pk=current.lot.announcement_id,deadline__gt=timezone.now()).exists():
+                return  # Acceptance reopened while the protocol request was running.
             old_state=current.state
             changed=(old_state,current.winner_bin)!=(result.state,result.winner_bin)
             current.state=result.state;current.winner_bin=result.winner_bin;current.winner_name=result.winner_name
@@ -142,15 +180,18 @@ def check_outcome(watch_id, lease):
             current.next_check_at=current.checked_at+timedelta(hours=24 if result.state in ('won','lost') else (6 if result.state in ('unsupported','no_bin') else 1))
             if changed:current.revision+=1
             current.save()
-            if result.state in ('won','lost','cancelled','unsuccessful'):
+            if result.state in ('won','lost','cancelled','unsuccessful','not_listed'):
                 for item in items:
                     if item.stage in ('contract','delivery','payment'):
                         # Preserve actual fulfillment stage, but expose revised verdict.
                         item.outcome=result.state if result.state in ('won','lost') else ''
                         item.save(update_fields=['outcome','updated_at'])
                         continue
-                    item.stage=result.state if result.state in ('won','lost') else 'applied';item.outcome=result.state if result.state in ('won','lost') else ''
-                    item.save(update_fields=['stage','outcome','updated_at'])
+                    if result.state in ('cancelled','unsuccessful') and item.stage=='interesting':
+                        continue
+                    item.stage='contract' if result.state == 'won' else ('lost' if result.state == 'lost' else ('not_participated' if result.state=='not_listed' else 'applied'));item.outcome=result.state if result.state in ('won','lost') else ''
+                    if result.state=='not_listed':item.result_tracking=False
+                    item.save(update_fields=['stage','outcome','result_tracking','updated_at'])
             elif old_state in ('won','lost'):
                 for item in items:
                     if item.stage in ('won','lost'):
@@ -192,6 +233,7 @@ def move_closed_unsubmitted():
     from .models import UserLotWorkflow
     from .workflow_state import update_workflow, reconcile_workflow_states
     now=timezone.now()
+    enroll_participation_checks()
     records=UserLotWorkflow.objects.filter(owner__is_active=True,result_tracking=False)
     candidates=records.filter(Q(stage__in=['new','interesting'],keep_after_deadline=False,
         lot__announcement__deadline__lte=now)|Q(stage='not_participated',

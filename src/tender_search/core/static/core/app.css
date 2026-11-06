@@ -132,3 +132,5 @@ button.is-searching>.icon{display:none}button .button-spinner{width:15px;height:
 .status-watch-icon:disabled{opacity:1;cursor:default}
 
 .company-bin-notice{border:1px solid #e5b54b;background:#fff8e6;color:#624500;margin-bottom:20px;padding:16px;border-radius:8px}.company-bin-notice p{margin:6px 0 12px}.company-bin-notice .button{display:inline-flex;width:auto}
+
+.participation-warning{display:inline-block;margin:4px 0;padding:3px 7px;border:1px solid #e5b54b;border-radius:4px;background:#fff8e6;color:#785000;font-size:12px;font-weight:500;line-height:1.4;text-transform:none;letter-spacing:normal}

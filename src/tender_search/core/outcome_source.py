@@ -17,6 +17,7 @@ class Outcome:
     winner_name: str = ''
     protocol_url: str = ''
     fingerprint: str = ''
+    participants_complete: bool = False
 
 
 def normalize_number(value):
@@ -75,7 +76,13 @@ def parse_lot_result(text, announcement_number, lot_number, company_bin):
         raise ProtocolFormatError('Победитель нужного лота не подтверждён.')
     winner=next(iter(winners))
     state='won' if winner==company_bin else ('lost' if company_bin in participants else 'not_listed')
-    return Outcome(state,winner,participants[winner])
+    counts = set()
+    for block in blocks:
+        counts.update(int(value) for value in re.findall(
+            r'Количество\s+(?:поданных|представленных)\s+заявок\s*[:\-]?\s*(\d+)', compact(block), re.I))
+    # Presence proves participation; absence requires a verified full count.
+    complete = counts == {len(participants)} and len(participants) > 0
+    return Outcome(state,winner,participants[winner],participants_complete=complete)
 
 
 def select_current_protocol(html, page_url):

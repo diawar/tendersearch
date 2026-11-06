@@ -18,6 +18,9 @@ def collection_lot_count(owner):
 def apply_personal_state(owner, lots):
     from .fulfillment import actions_for
     ids = [lot.pk for lot in lots]
+    from .models import ApplicationPreparation, CompanySettings
+    prepared = {item.lot_id:item for item in ApplicationPreparation.objects.filter(owner=owner,lot_id__in=ids)}
+    company_bin = CompanySettings.objects.filter(owner=owner).values_list('company_bin',flat=True).first() if prepared else None
     states = {state.lot_id:state for state in UserLotWorkflow.objects.filter(owner=owner,lot_id__in=ids)}
     from .models import ContractWatch
     contracts = {watch.workflow.lot_id: watch for watch in ContractWatch.objects.filter(
@@ -33,6 +36,9 @@ def apply_personal_state(owner, lots):
         stage__in=LOCKED_STAGES).values_list('lot_id',flat=True))
     for lot in lots:
         lot.workflow = states.get(lot.pk)
+        lot.has_preparation = lot.pk in prepared
+        preparation = prepared.get(lot.pk)
+        lot.preparation = preparation if preparation and preparation.company_bin == company_bin else None
         lot.contract_watch = contracts.get(lot.pk)
         lot.workflow_actions = actions_for(lot.workflow)
         lot.is_archived = bool(lot.workflow and lot.workflow.stage == 'archived')
