@@ -157,7 +157,7 @@ class SearchProfile(Timestamped):
 
 class CollectionLot(Timestamped):
     STAGES = [('new', 'Сохранён в подборку'), ('interesting', 'Интересные лоты'), ('applied', 'Подали заявку'),
-              ('won', 'Выиграли'), ('lost', 'Проиграли'), ('not_participated', 'Не участвовали'), ('contract', 'Заключение договора'), ('delivery', 'Поставка'), ('payment', 'Оплата')]
+              ('won', 'Выиграли'), ('lost', 'Проиграли'), ('not_participated', 'Не участвовали'), ('contract', 'Заключение договора'), ('delivery', 'Поставка'), ('payment', 'Оплата'), ('archived', 'Архив')]
     OUTCOMES = [('', 'Решение не указано'), ('won', 'Выиграли'), ('lost', 'Не выиграли')]
     profile = models.ForeignKey(SearchProfile, on_delete=models.CASCADE, related_name='collection_lots')
     lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
@@ -172,6 +172,38 @@ class CollectionLot(Timestamped):
     class Meta:
         constraints = [models.UniqueConstraint(fields=['profile', 'lot'], name='unique_collection_lot')]
         indexes = [models.Index(fields=['profile', 'stage'], name='idx_collection_stage')]
+
+
+class UserLotWorkflow(Timestamped):
+    """Personal work survives removal of a saved filter; memberships are projections."""
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
+    stage = models.CharField(max_length=20, choices=CollectionLot.STAGES, default='new')
+    outcome = models.CharField(max_length=10, choices=CollectionLot.OUTCOMES, blank=True)
+    expired_from_stage = models.CharField(max_length=20, blank=True)
+    result_tracking = models.BooleanField(default=False)
+    # Manual return after deadline must not be undone by the next monitor tick.
+    keep_after_deadline = models.BooleanField(default=False)
+    archived_from_stage = models.CharField(max_length=20, choices=CollectionLot.STAGES, blank=True)
+    archived_at = models.DateTimeField(null=True, blank=True)
+    archived_result_tracking = models.BooleanField(default=False)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['owner', 'lot'], name='unique_user_lot_workflow')]
+
+
+class ContractWatch(Timestamped):
+    workflow = models.OneToOneField(UserLotWorkflow, on_delete=models.CASCADE)
+    company_bin = models.CharField(max_length=12, blank=True)
+    generation = models.CharField(max_length=64, default=uuid.uuid4)
+    state = models.CharField(max_length=20, default='pending')
+    evidence = models.JSONField(default=dict)
+    error = models.CharField(max_length=300, blank=True)
+    checked_at = models.DateTimeField(null=True, blank=True)
+    next_check_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    lease = models.CharField(max_length=64, blank=True)
+    lease_until = models.DateTimeField(null=True, blank=True)
 
 
 class UserLotNote(Timestamped):

@@ -164,8 +164,12 @@ def scan_profile(profile_id, lease):
             current = SearchProfile.objects.select_for_update().get(pk=profile_id)
             if current.monitor_lease != lease or current.filters != profile.filters or not current.enabled: return
             baseline = current.index_baseline_at is None if settings.USE_LOCAL_INDEX else current.baseline_at is None
+            from .models import UserLotWorkflow
+            archived_lots = set(UserLotWorkflow.objects.filter(owner=current.owner,stage='archived').values_list('lot_id',flat=True))
             for hit in job.hits.select_related('lot__announcement','lot__customer').iterator():
                 lot = hit.lot
+                if lot.pk in archived_lots:
+                    continue
                 key = announcement_key(lot)
                 _, new = TelegramSeen.objects.get_or_create(profile=current,announcement_key=key)
                 eligible = True
@@ -198,7 +202,9 @@ def message_for(delivery):
     specification = profile.filters.get('specification', {})
     matched = match_lot(lot.name, lot.description, specification) if specification.get('terms') else []
     matched_line = f'🔎 Совпало: <b>{esc(" · ".join(matched),500)}</b>\n\n' if matched else ''
-    body = (f'📂 <b>Подборка: {esc(profile.name,200)}</b>\n🔔 Новая закупка\n{matched_line}<code>{esc(lot.announcement.number or lot.number,100)}</code>\n\n'
+    body = (f'📂 <b>Подборка: {esc(profile.name,200)}</b>\n🔔 Новая закупка\n{matched_line}'
+            f'📦 Лот: <code>{esc(lot.number or "Не указан",100)}</code>\n'
+            f'Объявление: <code>{esc(lot.announcement.number or "Не указано",100)}</code>\n\n'
             f'<b>{esc(lot.announcement.name or lot.name,700)}</b>\n\n'
             f'📦 Лот: {esc(lot.name,500)}\n💰 Сумма лота: <b>{esc(amount,100)}</b>\n'
             f'🏢 {esc(lot.customer.name if lot.customer else "Заказчик не указан",350)}\n'
@@ -216,6 +222,10 @@ def deliver_pending():
     deliveries=TelegramDelivery.objects.filter(state='pending',profile__enabled=True,owner__is_active=True).filter(Q(retry_at__isnull=True)|Q(retry_at__lte=now)).select_related('lot__announcement','lot__customer','profile')
     for delivery in deliveries[:20]:
         if not in_work_hours(): return
+        from .models import UserLotWorkflow
+        if UserLotWorkflow.objects.filter(owner_id=delivery.owner_id,lot_id=delivery.lot_id,stage='archived').exists():
+            TelegramDelivery.objects.filter(pk=delivery.pk,state='pending').update(state='cancelled')
+            continue
         sub=TelegramSubscription.objects.filter(owner=delivery.owner,enabled=True,chat_id__isnull=False).first()
         if not sub: continue
         if not TelegramDelivery.objects.filter(pk=delivery.pk,state='pending').update(state='sending',updated_at=timezone.now()): continue

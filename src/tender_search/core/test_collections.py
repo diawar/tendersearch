@@ -1,3 +1,4 @@
+from .test_status_watch import set_watch
 from datetime import timedelta
 from unittest.mock import patch
 from bs4 import BeautifulSoup
@@ -57,13 +58,15 @@ class CollectionsTests(TestCase):
         work.stage='payment'; work.save()
         starred = CollectionLot.objects.get(lot__source_id=2)
         starred.stage='interesting';starred.save()
-        Favorite.objects.create(owner=self.owner, lot=starred.lot)
+        Favorite.objects.get_or_create(owner=self.owner, lot=starred.lot)[0]
         IndexedLot.objects.update(current=False)
         self.run_refresh()
         self.assertFalse(CollectionLot.objects.filter(matches_filter=True).exists())
-        response = self.client.get('/collections/', {'profile':self.profile.pk})
-        self.assertEqual({item.lot.source_id for item in response.context['page']}, {1,2})
-        interesting = self.client.get('/collections/', {'profile':self.profile.pk, 'stage':'interesting'})
+        response = self.client.get('/workspace/', {'profile':self.profile.pk})
+        self.assertEqual(response.context['page'].paginator.count, 0)
+        payment = self.client.get('/workspace/', {'profile':self.profile.pk, 'stage':'payment'})
+        self.assertEqual([item.lot.source_id for item in payment.context['page']], [1])
+        interesting = self.client.get('/workspace/', {'profile':self.profile.pk, 'stage':'interesting'})
         self.assertEqual([item.lot.source_id for item in interesting.context['page']], [2])
 
     def test_partial_refresh_adds_new_matches_without_erasing_old_membership(self):
@@ -75,7 +78,7 @@ class CollectionsTests(TestCase):
 
     def test_important_historical_lots_from_same_profile_are_recovered(self):
         lot=store_lot(row(20))
-        Favorite.objects.create(owner=self.owner, lot=lot)
+        Favorite.objects.get_or_create(owner=self.owner, lot=lot)[0]
         old=WebSearch.objects.create(owner=self.owner, specification=dict(self.spec, profile_id=self.profile.pk))
         SearchHit.objects.create(search=old, lot=lot, terms=['flash'])
         self.run_refresh()
@@ -128,19 +131,19 @@ class CollectionsTests(TestCase):
         SearchProfile.objects.create(owner=self.owner,name='Вторая')
         foreign=SearchProfile.objects.create(owner=self.other,name='Чужая')
         item=CollectionLot.objects.get()
-        Favorite.objects.create(owner=self.owner,lot=item.lot)
-        AnnouncementWatch.objects.create(owner=self.owner,lot=item.lot,announcement=item.lot.announcement,enabled=True)
-        response=self.client.get('/collections/',{'profile':self.profile.pk})
+        Favorite.objects.get_or_create(owner=self.owner,lot=item.lot)[0]
+        set_watch(owner=self.owner,lot=item.lot,announcement=item.lot.announcement,enabled=True)
+        response=self.client.get('/workspace/',{'profile':self.profile.pk,'stage':'interesting'})
         soup=BeautifulSoup(response.content,'html.parser')
         self.assertEqual(len(soup.select('.collection-tab')),3)
-        self.assertEqual(len(soup.select('.funnel-step')),9)
+        self.assertEqual(len(soup.select('.funnel-step')),10)
         self.assertTrue(soup.select_one('.favorite-icon.selected'))
         self.assertTrue(soup.select_one('.status-watch-icon.selected'))
         self.assertNotContains(response,'Чужая')
-        self.assertEqual(self.client.get('/collections/',{'profile':foreign.pk}).status_code,404)
-        self.assertEqual(self.client.get('/collections/',{'profile':'bad'}).status_code,404)
+        self.assertEqual(self.client.get('/workspace/',{'profile':foreign.pk}).status_code,404)
+        self.assertEqual(self.client.get('/workspace/',{'profile':'bad'}).status_code,404)
         self.client.force_login(self.other)
-        self.assertEqual(self.client.post(f'/collections/items/{item.pk}/stage/',{'stage':'payment'}).status_code,404)
+        self.assertEqual(self.client.post(f'/workspace/items/{item.pk}/stage/',{'stage':'payment'}).status_code,404)
         self.assertEqual(self.client.post(f'/profiles/{self.profile.pk}/refresh-collection/').status_code,404)
         self.assertEqual(self.client.post(f'/profiles/{self.profile.pk}/tracking/').status_code,404)
 
@@ -149,7 +152,7 @@ class CollectionsTests(TestCase):
         item=CollectionLot.objects.get()
         other=SearchProfile.objects.create(owner=self.owner,name='Другая')
         independent=CollectionLot.objects.create(profile=other,lot=item.lot)
-        endpoint=f'/collections/items/{item.pk}/stage/'
+        endpoint=f'/workspace/items/{item.pk}/stage/'
         self.assertEqual(self.client.get(endpoint).status_code,405)
         self.client.post(endpoint,{'stage':'decision','outcome':'won'})
         item.refresh_from_db();independent.refresh_from_db()
@@ -187,11 +190,11 @@ class CollectionsTests(TestCase):
             self.client.post('/search/',dict(values,profile_id=saved.pk,terms='клавиатур'))
         saved.refresh_from_db();self.assertEqual(saved.collection_revision,previous+1)
 
-    def test_saved_controls_use_save_icon_and_sidebar_has_collections(self):
+    def test_saved_controls_use_tracking_eye_and_sidebar_has_collections(self):
         response=self.client.get('/search/')
         soup=BeautifulSoup(response.content,'html.parser')
-        self.assertTrue(soup.select_one('.sidebar a[href="/collections/"]'))
-        self.assertTrue(soup.select_one('.saved-list .profile-tracking use')['href'].endswith('#save'))
+        self.assertTrue(soup.select_one('.sidebar a[href="/workspace/"]'))
+        self.assertTrue(soup.select_one('.saved-list .profile-tracking use')['href'].endswith('#eye'))
         self.assertFalse(soup.select('.saved-list .status-watch-icon'))
 
     def test_personal_notes_are_shared_between_own_collections_but_hidden_from_others(self):
@@ -211,7 +214,7 @@ class CollectionsTests(TestCase):
         self.assertNotContains(response,'<script>alert(1)</script>')
         self.assertContains(response,'&lt;script&gt;alert(1)&lt;/script&gt;')
         self.client.force_login(self.other)
-        response=self.client.get('/collections/',{'profile':foreign.pk})
+        response=self.client.get('/workspace/',{'profile':foreign.pk})
         self.assertNotContains(response,'Мой контакт')
         self.client.post(f'/lots/{foreign_item.lot_id}/note/',
             {'note':'Другая личная заметка'})
@@ -223,7 +226,7 @@ class CollectionsTests(TestCase):
         self.run_refresh(); item=CollectionLot.objects.get()
         item.stage='delivery';item.save()
         url=f'/lots/{item.lot_id}/note/'
-        response=self.client.post(url,{'note':'Доставить утром','return_to':'/collections/?stage=interesting'})
+        response=self.client.post(url,{'note':'Доставить утром','return_to':'/workspace/?stage=interesting'})
         self.assertIn('stage=interesting',response.url)
         self.client.post(url,{'stage':'payment','outcome':'lost','note':'x'*10001})
         item.refresh_from_db()
@@ -244,28 +247,31 @@ class CollectionsTests(TestCase):
         job = WebSearch.objects.create(owner=self.owner, specification=self.spec, status='done', complete=True)
         SearchHit.objects.create(search=job, lot=lot, terms=['flash'])
         urls = [f'/search/{job.pk}/?view=table', f'/search/{job.pk}/?view=cards',
-                f'/lots/{lot.pk}/', f'/collections/?profile={self.profile.pk}']
+                f'/lots/{lot.pk}/', f'/workspace/?profile={self.profile.pk}']
 
         def check(star, plane):
             for url in urls + (['/favorites/'] if star else []):
                 with self.subTest(url=url, star=star, plane=plane):
+                    if url.startswith('/workspace/'):
+                        item.refresh_from_db()
+                        url += '&stage=' + ('all' if item.stage == 'new' else item.stage)
                     response = self.client.get(url)
                     self.assertEqual(response.status_code, 200)
                     actions = BeautifulSoup(response.content, 'html.parser').select_one(f'.lot-actions[data-lot-id="{lot.pk}"]')
                     self.assertIsNotNone(actions)
                     self.assertEqual(actions.select_one('.favorite-icon')['aria-pressed'], str(star).lower())
                     self.assertEqual(actions.select_one('.status-watch-icon')['aria-pressed'], str(plane).lower())
-                    self.assertNotIn('hidden', actions.select_one('.collection-membership').attrs)
+                    self.assertIsNone(actions.select_one('.collection-membership'))
             state = self.client.get('/lots/ui-state/', {'ids': lot.pk}).json()
             self.assertEqual(state['lots'], [{'id': str(lot.pk), 'favorite': star, 'watched': plane, 'saved': True}])
 
         check(False, False)
         self.client.post(f'/lots/{lot.pk}/favorite/', {'action': 'add'}, HTTP_HX_REQUEST='true')
-        check(True, False)
+        check(True, True)
         self.client.post(f'/lots/{lot.pk}/status-watch/', {'action': 'on'}, HTTP_HX_REQUEST='true')
         check(True, True)
         self.client.post(f'/lots/{lot.pk}/status-watch/', {'action': 'off'}, HTTP_HX_REQUEST='true')
-        check(True, False)
+        check(True, True)
         self.client.post(f'/lots/{lot.pk}/status-watch/', {'action': 'on'}, HTTP_HX_REQUEST='true')
         self.client.post(f'/lots/{lot.pk}/favorite/', {'action': 'remove'}, HTTP_HX_REQUEST='true')
         check(False, False)
@@ -274,8 +280,8 @@ class CollectionsTests(TestCase):
         self.run_refresh()
         item = CollectionLot.objects.get()
         lot = item.lot
-        Favorite.objects.create(owner=self.owner, lot=lot)
-        AnnouncementWatch.objects.create(owner=self.owner, announcement=lot.announcement, lot=lot, enabled=True)
+        Favorite.objects.get_or_create(owner=self.owner, lot=lot)[0]
+        set_watch(owner=self.owner, announcement=lot.announcement, lot=lot, enabled=True)
         self.client.force_login(self.other)
         response = self.client.get('/lots/ui-state/', {'ids': lot.pk, 'owner': self.owner.pk})
         self.assertEqual(response['Cache-Control'], 'private, no-store')
@@ -319,7 +325,7 @@ class CollectionsTests(TestCase):
         page=self.client.get('/search/')
         self.assertFalse(BeautifulSoup(page.content,'html.parser').select_one('button[value="save"]').has_attr('disabled'))
 
-    def test_aggregate_collection_deduplicates_lots_and_keeps_independent_workflows(self):
+    def test_aggregate_collection_deduplicates_lots_with_shared_workflow(self):
         self.run_refresh()
         first=CollectionLot.objects.get()
         first.stage='applied';first.save()
@@ -329,27 +335,27 @@ class CollectionsTests(TestCase):
         CollectionLot.objects.create(profile=second,lot=unique)
         foreign=SearchProfile.objects.create(owner=self.other,name='Чужая')
         CollectionLot.objects.create(profile=foreign,lot=store_lot(row(22)))
-        response=self.client.get('/collections/')
+        response=self.client.get('/workspace/')
         self.assertEqual(response.status_code,200)
-        self.assertEqual(response.context['page'].paginator.count,2)
+        self.assertEqual(response.context['page'].paginator.count,1)
         self.assertTrue(response.context['aggregate_collection'])
         self.assertNotContains(response,'Чужая')
-        self.assertEqual({s['key']:s['count'] for s in response.context['steps']}['all'],2)
+        self.assertEqual({s['key']:s['count'] for s in response.context['steps']}['all'],1)
         soup=BeautifulSoup(response.content,'html.parser')
         self.assertEqual(len(soup.select('.collection-stage-form')),0)
-        self.assertEqual(len(soup.select('.lot-actions')),2)
+        self.assertEqual(len(soup.select('.lot-actions')),1)
         self.assertEqual(soup.select_one('#sidebar-collection-count').get_text(strip=True),'(2)')
         self.assertEqual(self.client.get('/lots/ui-state/',{'ids':first.lot_id}).json()['collection_count'],2)
-        filtered=self.client.get('/collections/',{'profile':'all','stage':'applied'})
+        filtered=self.client.get('/workspace/',{'profile':'all','stage':'applied'})
         self.assertEqual(filtered.context['page'].paginator.count,1)
         self.assertEqual(len(filtered.context['page'][0].workflows),2)
-        result=self.client.post(f'/collections/items/{duplicate.pk}/stage/',{'stage':'contract','outcome':'won','return_scope':'all','return_stage':'all','note':'Общая заметка'})
-        self.assertRedirects(result,'/collections/?profile=all&stage=all')
+        result=self.client.post(f'/workspace/items/{duplicate.pk}/stage/',{'stage':'contract','outcome':'won','return_scope':'all','return_stage':'all','note':'Общая заметка'})
+        self.assertRedirects(result,'/workspace/?profile=all&stage=all')
         first.refresh_from_db();duplicate.refresh_from_db()
         self.assertEqual(first.stage,'applied')
-        self.assertEqual(duplicate.stage,'payment')
-        personal=self.client.get('/collections/',{'profile':self.profile.pk})
-        self.assertEqual(personal.context['page'].paginator.count,1)
+        self.assertEqual(duplicate.stage,'applied')
+        personal=self.client.get('/workspace/',{'profile':self.profile.pk})
+        self.assertEqual(personal.context['page'].paginator.count,0)
 
     def test_lot_card_note_is_shared_private_and_does_not_change_star_or_plane(self):
         from .models import UserLotNote
@@ -358,12 +364,12 @@ class CollectionsTests(TestCase):
         lot=item.lot;lot.refresh_state='done';lot.checked_at=timezone.now();lot.save()
         endpoint=f'/lots/{lot.pk}/note/'
         self.assertEqual(self.client.get(endpoint).status_code,405)
-        result=self.client.post(endpoint,{'note':'<script>Моя заметка</script>','next':f'/collections/?profile={self.profile.pk}'})
-        self.assertRedirects(result,f'/lots/{lot.pk}/?next=%2Fcollections%2F%3Fprofile%3D{self.profile.pk}')
+        result=self.client.post(endpoint,{'note':'<script>Моя заметка</script>','next':f'/workspace/?profile={self.profile.pk}'})
+        self.assertRedirects(result,f'/lots/{lot.pk}/?next=%2Fworkspace%2F%3Fprofile%3D{self.profile.pk}')
         card=self.client.get(f'/lots/{lot.pk}/')
         self.assertContains(card,'&lt;script&gt;Моя заметка&lt;/script&gt;')
         self.assertEqual(card.context['lot_note'],'<script>Моя заметка</script>')
-        collection=self.client.get('/collections/',{'profile':self.profile.pk})
+        collection=self.client.get('/workspace/',{'profile':self.profile.pk})
         self.assertEqual(collection.context['page'][0].note_text,card.context['lot_note'])
         self.assertFalse(Favorite.objects.filter(owner=self.owner).exists())
         self.assertFalse(AnnouncementWatch.objects.filter(owner=self.owner).exists())
@@ -389,21 +395,21 @@ class CollectionsTests(TestCase):
         expected={'amount':[32,33,31,34],'-amount':[31,33,32,34],'start':[33,31,32,34],'-start':[32,31,33,34],'end':[32,33,31,34],'-end':[31,33,32,34]}
         for scope in ('all',str(self.profile.pk)):
             for ordering,identifiers in expected.items():
-                page=self.client.get('/collections/',{'profile':scope,'stage':'applied','sort':ordering})
+                page=self.client.get('/workspace/',{'profile':scope,'stage':'applied','sort':ordering})
                 self.assertEqual([item.lot.source_id for item in page.context['page']],identifiers)
                 self.assertEqual(page.context['collection_sort'],ordering)
                 self.assertContains(page,'sort=')
         item=CollectionLot.objects.filter(profile=self.profile,lot=lots[0]).get()
-        moved=self.client.post(f'/collections/items/{item.pk}/stage/',{'stage':'payment','outcome':'','return_scope':'all','return_sort':'-amount'})
-        self.assertEqual(moved.url,'/collections/?profile=all&stage=all&sort=-amount')
+        moved=self.client.post(f'/workspace/items/{item.pk}/stage/',{'stage':'payment','outcome':'','return_scope':'all','return_sort':'-amount'})
+        self.assertEqual(moved.url,'/workspace/?profile=all&stage=all&sort=-amount')
         item.refresh_from_db();self.assertEqual(item.stage,'applied')
 
     def test_stage_picker_and_inline_notes_hidden_all_stages_and_sort_links_work(self):
         self.run_refresh();item=CollectionLot.objects.get()
         for scope in ('all',str(self.profile.pk)):
             for stage in ('new','interesting','applied','won','lost','not_participated','contract','delivery','payment'):
-                item.stage=stage;item.save()
-                response=self.client.get('/collections/',{'profile':scope,'stage':'all' if stage=='new' else stage})
+                item.stage=stage;item.outcome=stage if stage in ('won','lost') else '';item.save()
+                response=self.client.get('/workspace/',{'profile':scope,'stage':'all' if stage=='new' else stage})
                 soup=BeautifulSoup(response.content,'html.parser')
                 self.assertFalse(soup.select('.collection-stage-form, .collection-note-form'))
                 self.assertNotContains(response,'<th>Этап работы</th>',html=True)
@@ -411,6 +417,6 @@ class CollectionsTests(TestCase):
                 self.assertEqual(len(links),3)
                 for link in links:
                     self.assertNotIn('hx-target',link.attrs)
-                    self.assertEqual(self.client.get('/collections/'+link['href']).status_code,200)
-        response=self.client.post(f'/lots/{item.lot_id}/note/',{'note':'Личная','return_to':'https://evil.example/collections/'})
+                    self.assertEqual(self.client.get('/workspace/'+link['href']).status_code,200)
+        response=self.client.post(f'/lots/{item.lot_id}/note/',{'note':'Личная','return_to':'https://evil.example/workspace/'})
         self.assertEqual(response.url,f'/lots/{item.lot_id}/')

@@ -50,6 +50,8 @@ class PreparedMatcher:
                 pattern = re.compile(expression)
             included.append((original, term, pattern))
         self.included = tuple(included)
+        filters = specification.get('filters', {})
+        self.number_only = not included and any(filters.get(key) for key in ('lot_number', 'announcement_number'))
 
     def __call__(self, name, description):
         if self.kind == 'field' and not self.excluded:
@@ -60,6 +62,10 @@ class PreparedMatcher:
                 return []
             if self.kind == 'field':
                 text = normalize(name)
+        # Number filters are checked against the row by the search service.
+        # Keep exclusion checking above, even for a number-only search.
+        if self.number_only:
+            return ['По номеру']
         found = []
         for original, term, pattern in self.included:
             matched = bool(term) and (text == term if self.kind == 'field' else

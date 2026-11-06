@@ -1,0 +1,6 @@
+<div id="lot-documents">{% if lot.is_favorite or lot.is_archived %}<section class="panel"><h2>Документы закупки</h2>
+{% if documents_pending %}<p role="status"><span class="search-spinner" aria-hidden="true"></span> Скачиваем документы…</p>{% endif %}
+{% if document_batch.error %}<p class="error">{{ document_batch.error }}</p>{% endif %}
+<ul class="document-list">{% for doc in documents %}<li>{% if doc.saved_version %}<a href="{% url 'document_download' lot_id=lot.pk version_id=doc.saved_version.pk %}">{{ doc.name }}</a>{% else %}{{ doc.name }}{% endif %}{% if doc.status == 'error' %}<small class="error"> — {{ doc.error }}</small>{% endif %}</li>{% empty %}{% if document_batch.state == 'done' %}<li>На портале нет файлов для этого лота.</li>{% elif not documents_pending %}<li>Документы ещё не загружены.</li>{% endif %}{% endfor %}</ul>
+{% if lot.is_favorite and not documents_pending and document_batch.state != 'done' %}<form data-lot-async method="post" action="{% url 'document_retry' lot_id=lot.pk %}">{% csrf_token %}<button type="submit" class="outline">Загрузить документы</button></form>{% endif %}
+</section>{% endif %}</div>

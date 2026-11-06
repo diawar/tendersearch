@@ -14,9 +14,9 @@ from .models import SearchProfile, CollectionLot, Favorite, AnnouncementWatch, T
 from .collections_service import enqueue_collection
 from .lot_state import visible_collection_lots
 
-STEPS = [('all', 'Все лоты'), ('interesting', 'Интересные лоты'), ('applied', 'Подали заявку'),
+STEPS = [('all', 'Неразобранные лоты'), ('interesting', 'Интересные лоты'), ('applied', 'Подали заявку'),
          ('contract', 'Заключение договора'), ('delivery', 'Поставка'), ('payment', 'Оплата'),
-         ('won', 'Выиграли'), ('lost', 'Проиграли'), ('not_participated', 'Не участвовали')]
+         ('won', 'Выиграли'), ('lost', 'Проиграли'), ('not_participated', 'Не участвовали'), ('archived', 'Архив')]
 
 
 @login_required
@@ -45,12 +45,14 @@ def collections(request):
             records = records.filter(profile=profile)
         all_records = records
         counters = {key: set() for key, label in STEPS}
-        for identifier, current_stage, starred in records.values_list('lot_id', 'stage', 'starred'):
-            counters['all'].add(identifier)
-            if current_stage in counters:
+        for identifier, current_stage, outcome in records.values_list('lot_id', 'stage', 'outcome'):
+            if current_stage == 'new':
+                counters['all'].add(identifier)
+            if current_stage in counters and current_stage not in ('won','lost'):
                 counters[current_stage].add(identifier)
-        if stage != 'all':
-            records = records.filter(stage=stage)
+            if outcome in ('won','lost'):
+                counters[outcome].add(identifier)
+        records = records.filter(outcome=stage) if stage in ('won','lost') else records.filter(stage='new' if stage == 'all' else stage)
         if aggregate:
             representatives = records.order_by().values('lot_id').annotate(identifier=Max('pk')).values('identifier')
             records = records.filter(pk__in=Subquery(representatives))
@@ -127,7 +129,7 @@ def tracking(request, profile_id):
     if request.headers.get('HX-Request'):
         missing = profile.enabled and not TelegramSubscription.objects.filter(owner=request.user, enabled=True, chat_id__isnull=False).exists()
         return render(request, 'core/_profile_tracking.html', {'profile': profile, 'tracking_error': error, 'telegram_missing': missing})
-    return redirect(f"{reverse('collections')}?profile={profile.pk}")
+    return redirect(f"{reverse('workspace')}?profile={profile.pk}")
 
 
 @login_required
@@ -135,7 +137,7 @@ def tracking(request, profile_id):
 def refresh(request, profile_id):
     profile = get_object_or_404(SearchProfile, pk=profile_id, owner=request.user)
     enqueue_collection(profile.pk, force=True)
-    return redirect(f"{reverse('collections')}?profile={profile.pk}")
+    return redirect(f"{reverse('workspace')}?profile={profile.pk}")
 
 
 @login_required
@@ -144,16 +146,41 @@ def move(request, item_id):
     from django.contrib import messages
     with transaction.atomic():
         candidate=get_object_or_404(CollectionLot,pk=item_id,profile__owner=request.user)
-        get_object_or_404(SearchProfile.objects.select_for_update(),pk=candidate.profile_id,owner=request.user)
+        list(SearchProfile.objects.select_for_update().filter(owner=request.user).order_by('pk'))
         item=get_object_or_404(CollectionLot.objects.select_for_update(),pk=item_id)
-        if request.POST.get('stage')=='interesting' and item.stage=='new':
-            item.stage='interesting';item.outcome='';item.result_tracking=False
-            item.save(update_fields=['stage','outcome','result_tracking','updated_at'])
-            destination='interesting'
+        from .workflow_state import update_workflow
+        if request.POST.get('stage')=='interesting' and item.stage in ('new', 'not_participated'):
+            destination = 'not_participated' if item.stage == 'not_participated' else 'all'
+            deadline = item.lot.announcement.deadline
+            update_workflow(request.user.pk, item.lot_id, stage='interesting', outcome='',
+                result_tracking=False, expired_from_stage='',
+                keep_after_deadline=bool(deadline and deadline <= timezone.now()))
+        elif request.POST.get('stage') == 'not_participated' and item.stage in ('new', 'interesting'):
+            destination = 'interesting' if item.stage == 'interesting' else 'all'
+            update_workflow(request.user.pk, item.lot_id, stage='not_participated', outcome='',
+                result_tracking=False, expired_from_stage='', keep_after_deadline=False)
         else:
             messages.error(request,'Этап меняется автоматически. Для подачи используйте кнопку «Подать цену» после ввода цены.')
             destination='all'
     target='all' if request.POST.get('return_scope')=='all' else item.profile_id
     selected_sort=request.POST.get('return_sort','')
     suffix='&sort='+selected_sort if selected_sort in {prefix+key for prefix in ('','-') for key in ('amount','start','end')} else ''
-    return redirect(f"{reverse('collections')}?profile={target}&stage={destination}{suffix}")
+    return redirect(f"{reverse('workspace')}?profile={target}&stage={destination}{suffix}")
+
+
+@login_required
+@require_POST
+def fulfillment_action(request, lot_id):
+    from django.contrib import messages
+    from django.utils.http import url_has_allowed_host_and_scheme
+    from .fulfillment import advance
+    if not CollectionLot.objects.filter(profile__owner=request.user,lot_id=lot_id).exists():
+        raise Http404
+    try:
+        advance(request.user.pk,lot_id,request.POST.get('action',''))
+    except ValueError as exc:
+        messages.error(request,str(exc))
+    target=request.POST.get('next','')
+    if target and url_has_allowed_host_and_scheme(target,allowed_hosts={request.get_host()},require_https=request.is_secure()):
+        return redirect(target)
+    return redirect('workspace')

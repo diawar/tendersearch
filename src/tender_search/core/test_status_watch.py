@@ -7,6 +7,10 @@ from .models import Favorite,AnnouncementWatch,StatusDelivery,TelegramSubscripti
 from .search_service import store_lot
 from .status_monitor import check_status,deliver_status_notifications
 
+def set_watch(**values):
+    owner=values.pop('owner');announcement=values.pop('announcement')
+    return AnnouncementWatch.objects.update_or_create(owner=owner,announcement=announcement,defaults=values)[0]
+
 @override_settings(TELEGRAM_BOT_TOKEN='test-only',STORAGES={'default':{'BACKEND':'django.core.files.storage.FileSystemStorage'},'staticfiles':{'BACKEND':'django.contrib.staticfiles.storage.StaticFilesStorage'}})
 class StatusWatchTests(TestCase):
     def setUp(self):
@@ -17,7 +21,7 @@ class StatusWatchTests(TestCase):
         self.lot=store_lot({'id':500,'announcement_id':1000,'announcement_number':'1000-1','lot_number':'500-1','name_ru':'Ноутбук','total_price':50000,'customers':[]})
         self.url=f'/lots/{self.lot.pk}/status-watch/'
     def enable(self):
-        self.client.post(self.url,{'action':'on'})
+        self.client.post(f'/lots/{self.lot.pk}/favorite/',{'action':'add'})
         return AnnouncementWatch.objects.get(owner=self.owner)
     def scan(self,card):
         watch=AnnouncementWatch.objects.get(owner=self.owner)
@@ -25,17 +29,17 @@ class StatusWatchTests(TestCase):
         with patch('tender_search.core.status_monitor.in_work_hours',return_value=True),patch('tender_search.core.status_monitor.ZakupClient') as api:
             api.return_value.__enter__.return_value.announcement.return_value=card
             check_status(watch.pk,'test')
-    def test_star_does_not_enable_watch(self):
+    def test_star_enters_interesting_and_enables_notifications(self):
         self.client.post(f'/lots/{self.lot.pk}/favorite/',{'action':'add'})
         self.assertTrue(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
-        self.assertFalse(AnnouncementWatch.objects.filter(owner=self.owner,enabled=True).exists())
+        self.assertTrue(AnnouncementWatch.objects.filter(owner=self.owner,enabled=True).exists())
     def test_plane_adds_favorite_and_is_idempotent(self):
         self.enable();self.enable()
         self.assertEqual(AnnouncementWatch.objects.filter(owner=self.owner,enabled=True).count(),1)
         self.assertTrue(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
-        self.client.post(self.url,{'action':'off'})
+        self.client.post(f'/lots/{self.lot.pk}/favorite/',{'action':'remove'})
         self.assertFalse(AnnouncementWatch.objects.get(owner=self.owner).enabled)
-        self.assertTrue(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
+        self.assertFalse(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
     def test_favorite_removal_stops_watch_and_pending_delivery(self):
         watch=self.enable()
         StatusDelivery.objects.create(watch=watch,generation=watch.generation,event_key='test',payload={})
@@ -66,11 +70,11 @@ class StatusWatchTests(TestCase):
         self.assertFalse(StatusDelivery.objects.exists())
     def test_no_access_to_other_users_watch(self):
         self.enable();self.client.force_login(self.other)
-        self.client.post(self.url,{'action':'off'})
+        self.client.post(f'/lots/{self.lot.pk}/favorite/',{'action':'remove'})
         self.assertTrue(AnnouncementWatch.objects.get(owner=self.owner).enabled)
         self.assertEqual(self.client.get(self.url).status_code,405)
         response=self.client.post(self.url,{'action':'on'},HTTP_HX_REQUEST='true')
-        self.assertContains(response,'Подключите Telegram')
+        self.assertContains(response,'Уведомления определяются этапом')
         self.assertFalse(Favorite.objects.filter(owner=self.other).exists())
     def test_delivery_not_repeated_and_not_sent_after_remove(self):
         self.enable();self.scan({'id':1000,'status':{'id':6,'name':'Опубликован'}})
@@ -89,7 +93,7 @@ class StatusWatchTests(TestCase):
             check_status(watch.pk,'test');deliver_status_notifications()
             api.assert_called_once();send.assert_called_once()
             self.assertIn('Слежение включено',send.call_args.args[1]['text'])
-            self.client.post(self.url,{'action':'off'})
+            self.client.post(f'/lots/{self.lot.pk}/favorite/',{'action':'remove'})
             deliver_status_notifications()
             self.assertEqual(send.call_count,2)
             self.assertIn('Слежение отключено',send.call_args.args[1]['text'])
@@ -113,8 +117,8 @@ class StatusWatchTests(TestCase):
 
     def test_stop_confirmation_once_and_stale_stop_cancelled_after_reenable(self):
         self.enable()
-        self.client.post(self.url, {'action':'off'})
-        self.client.post(self.url, {'action':'off'})
+        self.client.post(f'/lots/{self.lot.pk}/favorite/', {'action':'remove'})
+        self.client.post(f'/lots/{self.lot.pk}/favorite/', {'action':'remove'})
         self.assertEqual(StatusDelivery.objects.filter(event_key__endswith=':stop').count(),1)
         self.enable()
         with patch('tender_search.core.status_monitor.in_work_hours',return_value=True),patch('tender_search.core.status_monitor.telegram_api') as api:

@@ -12,7 +12,7 @@ from .source import source_client
 from .outcome_source import OutcomePortal, Outcome, ProtocolFormatError
 from .telegram_service import telegram_api, TelegramError
 
-TRACKED_STAGES = ('applied','won','lost')
+TRACKED_STAGES = ('applied','won','lost','contract','delivery','payment')
 
 
 def company_bin_for(owner_id):
@@ -46,7 +46,15 @@ def reset_company(owner_id, new_bin):
         if company.company_bin==new_bin:return
         company.company_bin=new_bin;company.save(update_fields=['company_bin','updated_at'])
         list(SearchProfile.objects.select_for_update().filter(owner_id=owner_id).order_by('pk'))
-        CollectionLot.objects.filter(profile__owner_id=owner_id,result_tracking=True,stage__in=['won','lost']).update(stage='applied',outcome='')
+        from .contract_service import invalidate
+        invalidate(owner_id)
+        from .workflow_state import update_workflow
+        for lot_id in CollectionLot.objects.filter(profile__owner_id=owner_id,result_tracking=True,
+                stage__in=['won','lost']).values_list('lot_id',flat=True).distinct():
+            update_workflow(owner_id, lot_id, stage='applied', outcome='')
+        for lot_id in CollectionLot.objects.filter(profile__owner_id=owner_id,result_tracking=True,
+                stage__in=['contract','delivery','payment']).values_list('lot_id',flat=True).distinct():
+            update_workflow(owner_id, lot_id, outcome='')
         watches=LotOutcomeWatch.objects.select_for_update().filter(owner_id=owner_id)
         for watch in watches:
             watch.company_bin=new_bin;watch.generation=secrets.token_hex(16)
@@ -136,12 +144,19 @@ def check_outcome(watch_id, lease):
             current.save()
             if result.state in ('won','lost','cancelled','unsuccessful'):
                 for item in items:
+                    if item.stage in ('contract','delivery','payment'):
+                        # Preserve actual fulfillment stage, but expose revised verdict.
+                        item.outcome=result.state if result.state in ('won','lost') else ''
+                        item.save(update_fields=['outcome','updated_at'])
+                        continue
                     item.stage=result.state if result.state in ('won','lost') else 'applied';item.outcome=result.state if result.state in ('won','lost') else ''
                     item.save(update_fields=['stage','outcome','updated_at'])
             elif old_state in ('won','lost'):
                 for item in items:
                     if item.stage in ('won','lost'):
                         item.stage='applied';item.outcome='';item.save(update_fields=['stage','outcome','updated_at'])
+                    elif item.stage in ('contract','delivery','payment'):
+                        item.outcome='';item.save(update_fields=['outcome','updated_at'])
             if changed and (result.state in ('won','lost','not_listed','cancelled','unsuccessful') or old_state in ('won','lost')):
                 OutcomeDelivery.objects.filter(watch=current,state='pending').update(state='cancelled')
                 OutcomeDelivery.objects.get_or_create(event_key=f'{current.pk}:{current.generation}:{current.revision}',
@@ -174,11 +189,28 @@ def deliver_outcomes():
 
 
 def move_closed_unsubmitted():
+    from .models import UserLotWorkflow
+    from .workflow_state import update_workflow, reconcile_workflow_states
     now=timezone.now()
-    records=CollectionLot.objects.filter(profile__owner__is_active=True,result_tracking=False)
-    records.filter(stage__in=['new','interesting'],lot__announcement__deadline__lte=now).update(expired_from_stage=F('stage'),stage='not_participated')
-    # Source extensions reopen only automatically moved lots, never submitted or decided ones.
-    records.filter(stage='not_participated',expired_from_stage__in=['new','interesting'],lot__announcement__deadline__gt=now).update(stage=F('expired_from_stage'),expired_from_stage='')
+    records=UserLotWorkflow.objects.filter(owner__is_active=True,result_tracking=False)
+    candidates=records.filter(Q(stage__in=['new','interesting'],keep_after_deadline=False,
+        lot__announcement__deadline__lte=now)|Q(stage='not_participated',
+        expired_from_stage__in=['new','interesting'],lot__announcement__deadline__gt=now))
+    for pk in list(candidates.values_list('pk',flat=True)):
+        with transaction.atomic():
+            # Same lock order as user actions; recheck after locking to avoid undoing a manual move.
+            owner_id=UserLotWorkflow.objects.values_list('owner_id',flat=True).get(pk=pk)
+            list(SearchProfile.objects.select_for_update().filter(owner_id=owner_id).order_by('pk'))
+            state=candidates.select_for_update().filter(pk=pk).first()
+            if not state:
+                continue
+            if state.stage == 'not_participated':
+                update_workflow(state.owner_id,state.lot_id,stage=state.expired_from_stage,expired_from_stage='')
+            else:
+                update_workflow(state.owner_id,state.lot_id,expired_from_stage=state.stage,stage='not_participated')
+    # A genuinely extended deadline starts a new acceptance period.
+    records.filter(keep_after_deadline=True,lot__announcement__deadline__gt=now).update(keep_after_deadline=False)
+    reconcile_workflow_states()
 
 
 def cancel_application(owner, lot):
@@ -201,5 +233,7 @@ def cancel_application(owner, lot):
             watch.save()
             OutcomeDelivery.objects.filter(watch=watch,state='pending').update(state='cancelled')
         price.locked_at=None;price.save(update_fields=['locked_at','updated_at'])
-        CollectionLot.objects.filter(pk__in=[item.pk for item in applied]).update(
-            stage='interesting',outcome='',result_tracking=False,expired_from_stage='',updated_at=timezone.now())
+        from .workflow_state import update_workflow
+        deadline=lot.announcement.deadline
+        update_workflow(owner.pk,lot.pk,stage='interesting',outcome='',result_tracking=False,
+            expired_from_stage='',keep_after_deadline=bool(deadline and deadline <= timezone.now()))

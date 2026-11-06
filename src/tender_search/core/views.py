@@ -14,6 +14,7 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from datetime import timedelta
 from urllib.parse import urlsplit, urlencode
 from django.urls import reverse
+from hashlib import sha256
 
 from .models import Favorite, Notification, SearchProfile, WebSearch, Lot, TelegramSubscription, TelegramDelivery, AnnouncementWatch, StatusDelivery, Document, DocumentVersion, LotDocumentDownload, UserLotNote, UserLotPrice, CompanySettings, LotOutcomeWatch, LotSpecification
 from .forms import SearchForm
@@ -111,7 +112,13 @@ def search(request):
 @login_required
 @require_POST
 def profile_delete(request, profile_id):
-    get_object_or_404(SearchProfile, pk=profile_id, owner=request.user).delete()
+    from .workflow_state import delete_profile_preserving_work
+    from django.contrib import messages
+    get_object_or_404(SearchProfile, pk=profile_id, owner=request.user)
+    try:
+        delete_profile_preserving_work(request.user.pk, profile_id)
+    except ValueError as exc:
+        messages.error(request, str(exc))
     return redirect("search")
 
 
@@ -137,6 +144,7 @@ def lot_ui_state(request):
         {'id': str(lot.pk), 'favorite': lot.is_favorite, 'watched': lot.is_status_watched,
          'saved': lot.is_in_collection} for lot in lots],
         'favorite_count': Favorite.objects.filter(owner=request.user).count(),
+        'locked_lots': [str(lot.pk) for lot in lots if lot.favorite_locked],
         'collection_count': collection_lot_count(request.user)})
     response['Cache-Control'] = 'private, no-store'
     return response
@@ -264,41 +272,79 @@ def queue_refresh(lot):
             Lot.objects.filter(pk=lot.pk).update(refresh_state="error", refresh_error="Очередь обновления недоступна.")
 
 
+def lot_revisions(lot, batch, specification):
+    def revision(*values):
+        return sha256(repr(values).encode()).hexdigest()[:20]
+    return {
+        'detail': revision(lot.refresh_state, lot.checked_at, lot.refresh_error),
+        'documents': revision(batch.state, batch.updated_at, batch.error) if batch else 'none',
+        'specification': revision(specification.state, specification.updated_at, specification.error) if specification else 'none',
+    }
+
+
+def expire_lot_jobs(lot, batch=None, specification=None):
+    now = timezone.now()
+    if lot.refresh_state == 'running' and lot.refresh_started_at and lot.refresh_started_at < now-timedelta(minutes=6):
+        Lot.objects.filter(pk=lot.pk, refresh_state='running', refresh_started_at=lot.refresh_started_at).update(refresh_state='error', refresh_error='Обновление не завершилось вовремя.')
+        lot.refresh_from_db(fields=['refresh_state', 'refresh_error', 'checked_at'])
+    for job, minutes, message in (
+        (batch, 25, 'Загрузка не завершилась вовремя. Повторите попытку.'),
+        (specification, 15, 'Извлечение не завершилось вовремя. Повторите запрос.'),
+    ):
+        if job and job.state in ('queued', 'running') and job.updated_at < now-timedelta(minutes=minutes):
+            type(job).objects.filter(pk=job.pk, state=job.state, updated_at=job.updated_at).update(state='error', error=message, updated_at=now)
+            job.refresh_from_db(fields=['state', 'error', 'updated_at'])
+
+
 @login_required
-def lot_detail(request, lot_id, price_form=None):
+def lot_detail_status(request, lot_id):
+    # Poll metadata only; never reload large document texts or enqueue a new refresh.
+    lot = get_object_or_404(Lot.objects.only('refresh_state', 'refresh_error', 'refresh_started_at', 'checked_at'), pk=lot_id)
+    favorite = Favorite.objects.filter(owner=request.user, lot_id=lot_id).exists()
+    batch = LotDocumentDownload.objects.filter(lot_id=lot_id).first() if favorite else None
+    specification = LotSpecification.objects.filter(owner=request.user, lot_id=lot_id).defer('documents').first()
+    expire_lot_jobs(lot, batch, specification)
+    revisions = lot_revisions(lot, batch, specification)
+    pending = lot.refresh_state == 'running' or any(job and job.state in ('queued', 'running') for job in (batch, specification))
+    data = {'revisions': revisions, 'pending': bool(pending), 'owner': request.user.pk}
+    if any(request.GET.get(key) != value for key, value in revisions.items()):
+        data['html'] = lot_detail(request, lot_id, updates=True).content.decode()
+    response = JsonResponse(data)
+    response['Cache-Control'] = 'private, no-store'
+    return response
+
+
+@login_required
+def lot_detail(request, lot_id, price_form=None, updates=False):
     lot = get_object_or_404(Lot.objects.select_related("announcement", "customer"), pk=lot_id)
     back_key = f"lot_return_{lot_id}"
     back_url = reverse('search')
-    for candidate in (request.GET.get('next'), request.META.get('HTTP_REFERER'), request.session.get(back_key)):
+    candidates = (request.session.get(back_key),) if updates else (request.GET.get('next'), request.META.get('HTTP_REFERER'), request.session.get(back_key))
+    for candidate in candidates:
         if candidate and url_has_allowed_host_and_scheme(candidate, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
             parts = urlsplit(candidate)
             if not parts.path.startswith('/') or parts.path.startswith('//') or parts.path == request.path:
                 continue
-            back_url = parts.path + ('?' + parts.query if parts.query else '')
-            request.session[back_key] = back_url
+            back_path = reverse('workspace') if parts.path == '/collections/' else parts.path
+            back_url = back_path + ('?' + parts.query if parts.query else '')
+            if not updates and request.session.get(back_key) != back_url:
+                request.session[back_key] = back_url
             break
-    if lot.refresh_state == "running" and lot.refresh_started_at and lot.refresh_started_at < timezone.now()-timedelta(minutes=6):
-        Lot.objects.filter(pk=lot.pk).update(refresh_state="error", refresh_error="Обновление не завершилось вовремя.")
-        lot.refresh_from_db()
-    if not lot.refresh_state or (lot.refresh_state == "done" and lot.checked_at and lot.checked_at < timezone.now()-timedelta(minutes=5)):
+    result_context(request, [lot])
+    expire_lot_jobs(lot)
+    if not updates and not lot.is_archived and (not lot.refresh_state or (lot.refresh_state == "done" and lot.checked_at and lot.checked_at < timezone.now()-timedelta(minutes=5))):
         queue_refresh(lot)
         lot.refresh_from_db()
-    result_context(request, [lot])
     batch = LotDocumentDownload.objects.filter(lot=lot).first() if lot.is_favorite else None
-    if batch and batch.state in {'queued', 'running'} and batch.updated_at < timezone.now()-timedelta(minutes=25):
-        batch.state, batch.error = 'error', 'Загрузка не завершилась вовремя. Повторите попытку.'
-        batch.save(update_fields=['state','error','updated_at'])
     documents = []
-    if lot.is_favorite:
+    if lot.is_favorite or lot.is_archived:
         for doc in Document.objects.filter(announcement=lot.announcement).filter(Q(lot=lot)|Q(lot__isnull=True)).prefetch_related('versions').order_by('name'):
             doc.saved_version = max(doc.versions.all(),key=lambda version:version.pk,default=None)
             documents.append(doc)
     specification = LotSpecification.objects.filter(owner=request.user,lot=lot).first()
-    if specification and specification.state in ('queued','running') and specification.updated_at < timezone.now()-timedelta(minutes=15):
-        specification.state='error';specification.error='Извлечение не завершилось вовремя. Повторите запрос.'
-        specification.save(update_fields=['state','error','updated_at'])
+    expire_lot_jobs(lot, batch, specification)
     from .lot_pricing import pricing_context
-    return render(request, "core/_lot_detail.html" if request.headers.get("HX-Request") else "core/lot_detail.html", {"specification":specification,"specification_pending":bool(specification and specification.state in ('queued','running')),**pricing_context(request.user, lot, price_form), "lot": lot, "back_url": back_url, "documents": documents, "document_batch": batch, "documents_pending": bool(batch and batch.state in {"queued", "running"}), "outcome_watch": LotOutcomeWatch.objects.filter(owner=request.user, lot=lot).first(), "lot_note": UserLotNote.objects.filter(owner=request.user, lot=lot).values_list("text", flat=True).first() or ""})
+    return render(request, "core/_lot_detail.html" if updates or request.headers.get("HX-Request") else "core/lot_detail.html", {"lot_description": "\n".join(dict.fromkeys(line.strip() for line in lot.description.splitlines())), "lot_revisions":lot_revisions(lot,batch,specification),"specification":specification,"specification_pending":bool(specification and specification.state in ('queued','running')),**pricing_context(request.user, lot, price_form), "lot": lot, "back_url": back_url, "documents": documents, "document_batch": batch, "documents_pending": bool(batch and batch.state in {"queued", "running"}), "outcome_watch": LotOutcomeWatch.objects.filter(owner=request.user, lot=lot).first(), "lot_note": UserLotNote.objects.filter(owner=request.user, lot=lot).values_list("text", flat=True).first() or ""})
 
 
 @login_required
@@ -307,6 +353,8 @@ def lot_specification_extract(request, lot_id):
     from .specification_service import queue_specification
     lot=get_object_or_404(Lot,pk=lot_id)
     queue_specification(request.user,lot)
+    if request.headers.get('X-Lot-Async') == '1':
+        return JsonResponse({'queued': True})
     target=reverse('lot_detail',kwargs={'lot_id':lot.pk})
     back=request.POST.get('next','')
     if back and url_has_allowed_host_and_scheme(back,allowed_hosts={request.get_host()},require_https=request.is_secure()):
@@ -339,8 +387,12 @@ def lot_price_save(request, lot_id):
             raise PermissionDenied
         UserLotPrice.objects.update_or_create(owner=request.user,lot=lot,
             defaults={'unit_gross':form.cleaned_data['unit_gross'],'vat_rate':form.cleaned_data['vat_rate'], 'locked_at':timezone.now()})
-        CollectionLot.objects.filter(pk__in=[item.pk for item in interested]).update(stage='applied',outcome='',result_tracking=True)
+        from .workflow_state import update_workflow
+        update_workflow(request.user.pk, lot.pk, stage='applied', outcome='', result_tracking=True,
+            expired_from_stage='', keep_after_deadline=False)
         register_watch(request.user.pk,lot.pk)
+        from .workflow_state import sync_lot
+        sync_lot(request.user.pk,lot.pk)
         messages.success(request, 'Лот перенесён в «Подали заявку». Цена зафиксирована, включена проверка итогов.')
     target = reverse('lot_detail', kwargs={'lot_id':lot.pk})
     back = request.POST.get('next', '')
@@ -380,7 +432,7 @@ def lot_note_save(request, lot_id):
         messages.success(request, 'Заметка сохранена.')
     return_to = request.POST.get('return_to', '')
     if (return_to and url_has_allowed_host_and_scheme(return_to, allowed_hosts={request.get_host()}, require_https=request.is_secure())
-            and urlsplit(return_to).path == reverse('collections')):
+            and urlsplit(return_to).path == reverse('workspace')):
         return redirect(return_to)
     target = reverse('lot_detail', kwargs={'lot_id': lot.pk})
     back = request.POST.get('next', '')
@@ -394,6 +446,8 @@ def lot_note_save(request, lot_id):
 def lot_refresh(request, lot_id):
     lot = get_object_or_404(Lot, pk=lot_id)
     queue_refresh(lot)
+    if request.headers.get('X-Lot-Async') == '1':
+        return JsonResponse({'queued': True})
     return redirect("lot_detail", lot_id=lot.pk)
 
 
@@ -401,13 +455,19 @@ def lot_refresh(request, lot_id):
 @require_POST
 def favorite(request, lot_id):
     lot = get_object_or_404(Lot, pk=lot_id)
-    if request.POST.get("action") == "remove":
-        Favorite.objects.filter(owner=request.user, lot=lot).delete()
-    elif request.POST.get("action") == "add":
-        Favorite.objects.get_or_create(owner=request.user, lot=lot)
+    from .workflow_state import add_to_interesting, remove_from_work
+    error = ''
+    if request.POST.get('action') == 'remove':
+        if not remove_from_work(request.user.pk,lot.pk):
+            error = 'Лот уже в работе. Снять звезду можно после явного завершения или отказа.'
+    elif request.POST.get('action') == 'add':
+        add_to_interesting(request.user.pk,lot.pk)
     if request.headers.get("HX-Request"):
         result_context(request, [lot])
-        return render(request, "core/_lot_actions.html", {"lot": lot, "update_favorite_count": True, "return_to": request.POST.get("next", "")})
+        return render(request, "core/_lot_actions.html", {"lot": lot, "update_favorite_count": True, "watch_error": error, "return_to": request.POST.get("next", "")})
+    if error:
+        from django.contrib import messages
+        messages.error(request, error)
     next_url = request.POST.get("next", "")
     if url_has_allowed_host_and_scheme(next_url, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
         return redirect(next_url)
@@ -465,7 +525,7 @@ def notification_settings(request):
                 reset_company(request.user.pk, company_form.cleaned_data['company_bin'])
                 messages.success(request, 'БИН компании сохранён.')
                 return redirect('notification_settings')
-        elif request.POST.get("action") == "connect" and settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_BOT_USERNAME:
+        elif request.POST.get("action") == "connect" and settings.TELEGRAM_POLLING_ENABLED and settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_BOT_USERNAME:
             link = connection_link(request.user)
             sub = TelegramSubscription.objects.get(owner=request.user)
         elif request.POST.get("action") == "disconnect":
@@ -475,7 +535,7 @@ def notification_settings(request):
             AnnouncementWatch.objects.filter(owner=request.user).update(enabled=False,lease="",lease_until=None)
             TelegramDelivery.objects.filter(owner=request.user,state="pending").update(state="cancelled")
             return redirect("notification_settings")
-    context = {"company_form":company_form,"subscription":sub,"telegram_ready":bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_BOT_USERNAME),"telegram_bot_username":settings.TELEGRAM_BOT_USERNAME,"connect_link":link}
+    context = {"company_form":company_form,"subscription":sub,"telegram_polling_enabled":settings.TELEGRAM_POLLING_ENABLED,"telegram_ready":bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_BOT_USERNAME),"telegram_bot_username":settings.TELEGRAM_BOT_USERNAME,"connect_link":link}
     template = "core/_telegram_status.html" if request.headers.get("HX-Request") else "core/settings.html"
     return render(request,template,context)
 
@@ -517,24 +577,10 @@ def profile_notifications(request, profile_id):
 @login_required
 @require_POST
 def status_watch(request,lot_id):
-    import secrets
-    from .status_monitor import cancel_watch
-    lot=get_object_or_404(Lot.objects.select_related("announcement"),pk=lot_id)
-    error=""
-    if request.POST.get("action")=="off":
-        cancel_watch(request.user.pk,lot.announcement_id)
-    elif request.POST.get("action")=="on":
-        if not TelegramSubscription.objects.filter(owner=request.user,enabled=True,chat_id__isnull=False).exists():
-            error="Подключите Telegram в настройках для слежения за статусом."
-        else:
-            with transaction.atomic():
-                watch,_=AnnouncementWatch.objects.select_for_update().get_or_create(owner=request.user,announcement=lot.announcement,defaults={"lot":lot})
-                Favorite.objects.get_or_create(owner=request.user,lot=lot)
-                if not watch.enabled:
-                    watch.enabled=True;watch.lot=lot;watch.generation=secrets.token_hex(16)
-                    watch.last_status="";watch.last_status_name="";watch.revision=0
-                    watch.next_check_at=None;watch.lease="";watch.lease_until=None;watch.error=""
-                    watch.save()
+    from .workflow_state import sync_lot
+    lot=get_object_or_404(Lot.objects.select_related('announcement'),pk=lot_id)
+    sync_lot(request.user.pk,lot.pk)
+    error='Уведомления определяются этапом лота. Измените этап в рабочем пространстве.'
     result_context(request,[lot])
     if request.headers.get("HX-Request"):
         return render(request,"core/_lot_actions.html",{"lot":lot,"update_favorite_count":True,"watch_error":error,"return_to":request.POST.get("next","")})
@@ -550,13 +596,19 @@ def document_retry(request, lot_id):
     lot = get_object_or_404(Lot, pk=lot_id, favorite__owner=request.user)
     from .document_service import queue_documents
     queue_documents(lot.pk)
+    if request.headers.get('X-Lot-Async') == '1':
+        return JsonResponse({'queued': True})
     return redirect('lot_detail',lot_id=lot.pk)
 
 
 @login_required
 def document_download(request, lot_id, version_id):
     from .document_service import stored_path
-    lot = get_object_or_404(Lot, pk=lot_id, favorite__owner=request.user)
+    from .models import UserLotWorkflow
+    lot = get_object_or_404(Lot, pk=lot_id)
+    if not (Favorite.objects.filter(owner=request.user,lot=lot).exists() or
+            UserLotWorkflow.objects.filter(owner=request.user,lot=lot,stage='archived').exists()):
+        raise Http404
     version = get_object_or_404(DocumentVersion.objects.select_related('document'),pk=version_id,document__announcement_id=lot.announcement_id)
     if version.document.lot_id not in {None,lot.pk}:
         raise Http404

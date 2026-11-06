@@ -14,7 +14,7 @@ def split_terms(value):
 
 
 class SearchForm(forms.Form):
-    terms = forms.CharField(label="Ключевые слова",
+    terms = forms.CharField(label="Ключевые слова", required=False,
                             widget=forms.Textarea(attrs={"rows": 2, "placeholder": "телефон\nсмартфон"}),
                             help_text="Один тег — одно слово. Количество тегов не ограничено.")
     mode = forms.ChoiceField(label="Объединение условий", initial="any", choices=[("any", "Любое условие — ИЛИ"), ("all", "Все условия — И")])
@@ -69,8 +69,6 @@ class SearchForm(forms.Form):
 
     def clean_terms(self):
         terms = split_terms(self.cleaned_data["terms"])
-        if not terms:
-            raise forms.ValidationError("Введите хотя бы одно слово.")
         return terms
 
     def clean_exclude(self):
@@ -78,6 +76,8 @@ class SearchForm(forms.Form):
 
     def clean(self):
         data = super().clean()
+        if not data.get('terms') and not data.get('number'):
+            self.add_error('terms', 'Введите ключевое слово или номер лота/объявления.')
         for low, high in [("amount_min", "amount_max"), ("deadline_from", "deadline_to")]:
             if data.get(low) is not None and data.get(high) is not None and data[low] > data[high]:
                 self.add_error(high, "Верхняя граница должна быть не меньше нижней.")

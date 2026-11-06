@@ -1,0 +1,16 @@
+<section class="panel lot-description" id="lot-description">
+  <h2>Описание и условия</h2>
+  <div class="lot-description-text">{{ lot_description|default:'Текстовое описание не предоставлено источником. Проверьте документацию на портале.'|linebreaks }}</div>
+  <dl class="lot-conditions">
+    <div><dt>Объявление</dt><dd><span class="lot-announcement-number">{{ lot.announcement.number }}</span><span>{{ lot.announcement.name }}</span></dd></div>
+    <div><dt>Статус объявления</dt><dd><span class="badge">{{ lot.announcement.status|default:'Ожидает проверки' }}</span></dd></div>
+    <div><dt>Способ закупки</dt><dd>{{ lot.raw.purchase_method_name|default:'Не указан' }}</dd></div>
+    <div><dt>Место поставки</dt><dd>{% for address in lot.raw.delivery_addresses %}<div>{{ address.name_ru }}</div>{% empty %}Не указано{% endfor %}</dd></div>
+  </dl>
+  <p class="muted lot-description-meta">{% if lot.checked_at %}Карточка проверена {{ lot.checked_at|date:'d.m.Y H:i' }}.{% else %}Сведения получены из поисковой выдачи; карточка ещё не проверена.{% endif %} Перед участием проверьте актуальные сроки и документы на портале.</p>
+  <div class="actions">
+    <a class="button" target="_blank" rel="noopener noreferrer" href="{{ lot.portal_url }}">Открыть на {{ lot.portal_label }} ↗</a>
+    <form data-lot-async method="post" action="{% url 'lot_refresh' lot_id=lot.pk %}">{% csrf_token %}<button class="button secondary" type="submit" {% if lot.refresh_state == 'running' %}disabled{% endif %}>Обновить сведения</button></form>
+    {% include 'core/_lot_actions.html' %}
+  </div>
+</section>

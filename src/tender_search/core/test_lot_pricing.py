@@ -68,7 +68,7 @@ class LotPricingTests(TestCase):
 
     def test_application_price_is_private_and_locked_without_changing_favorites(self):
         self.assertEqual(self.client.get(self.endpoint).status_code,405)
-        response=self.client.post(self.endpoint,{'unit_gross':'1 160,00','vat_rate':'16','next':'/collections/?profile=all'})
+        response=self.client.post(self.endpoint,{'unit_gross':'1 160,00','vat_rate':'16','next':'/workspace/?profile=all'})
         self.assertEqual(response.status_code,302)
         price=UserLotPrice.objects.get(owner=self.owner,lot=self.lot)
         self.assertEqual(price.unit_gross,1160)
@@ -82,8 +82,8 @@ class LotPricingTests(TestCase):
         price.refresh_from_db();self.assertEqual(price.unit_gross,1160)
         self.assertEqual(self.client.post(self.endpoint,{'unit_gross':'','vat_rate':'16'}).status_code,403)
         self.assertEqual(UserLotPrice.objects.get(owner=self.other).unit_gross,232)
-        self.assertFalse(Favorite.objects.exists())
-        self.assertFalse(AnnouncementWatch.objects.exists())
+        self.assertTrue(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
+        self.assertTrue(AnnouncementWatch.objects.filter(owner=self.owner,enabled=True).exists())
         self.assertTrue(UserLotPrice.objects.filter(owner=self.owner).exists())
         self.client.logout();self.assertEqual(self.client.post(self.endpoint,{}).status_code,302)
 

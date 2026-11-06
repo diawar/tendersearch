@@ -1,3 +1,4 @@
+from .test_status_watch import set_watch
 from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch,Mock
@@ -52,6 +53,87 @@ class AutomaticWorkflowTests(TestCase):
         self.lot.refresh_state='done';self.lot.checked_at=timezone.now();self.lot.save()
         self.item=CollectionLot.objects.create(profile=self.profile,lot=self.lot,stage='interesting')
         AnnouncementLotCache.objects.create(pk=self.lot.announcement.source_id,rows=[{'id':self.lot.source_id,'system':{'id':1},'is_combined':False,'plan_items':[{'count':2,'system':{'id':1},'purchase_method':{'id':12}}]}])
+    def test_move_to_interesting_stars_own_lot_and_enables_status_watch(self):
+        from .models import AnnouncementWatch
+        self.item.stage='new';self.item.save()
+        other_profile=SearchProfile.objects.create(owner=self.other,name='Чужая подборка')
+        other_item=CollectionLot.objects.create(profile=other_profile,lot=self.lot,stage='new')
+        with patch('tender_search.core.document_service.queue_documents') as documents, self.captureOnCommitCallbacks(execute=True):
+            response=self.client.post(f'/workspace/items/{self.item.pk}/stage/',{'stage':'interesting'})
+        self.assertEqual(response.status_code,302)
+        self.assertEqual(response.url,f'/workspace/?profile={self.profile.pk}&stage=all')
+        self.item.refresh_from_db();other_item.refresh_from_db()
+        self.assertEqual(self.item.stage,'interesting')
+        self.assertEqual(other_item.stage,'new')
+        self.assertTrue(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
+        self.assertFalse(Favorite.objects.filter(owner=self.other,lot=self.lot).exists())
+        self.assertTrue(AnnouncementWatch.objects.filter(owner=self.owner,enabled=True).exists())
+        documents.assert_called_once_with(self.lot.pk)
+        self.client.post(f'/workspace/items/{self.item.pk}/stage/',{'stage':'interesting'})
+        self.assertEqual(Favorite.objects.filter(owner=self.owner,lot=self.lot).count(),1)
+
+    def test_manual_decline_unprocessed_lot_stays_closed_without_star_or_watch(self):
+        self.item.stage='new';self.item.save()
+        url=f'/workspace/items/{self.item.pk}/stage/'
+        self.client.force_login(self.other)
+        self.assertEqual(self.client.post(url,{'stage':'not_participated'}).status_code,404)
+        self.client.force_login(self.owner)
+        response=self.client.post(url,{'stage':'not_participated','return_scope':'all','return_sort':'-amount'})
+        self.assertEqual(response.url,'/workspace/?profile=all&stage=all&sort=-amount')
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.stage,'not_participated')
+        self.assertEqual(self.item.expired_from_stage,'')
+        self.assertFalse(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
+        self.assertFalse(LotOutcomeWatch.objects.filter(owner=self.owner,lot=self.lot).exists())
+        move_closed_unsubmitted()
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.stage,'not_participated')
+        page=self.client.get('/workspace/',{'profile':self.profile.pk,'stage':'not_participated'})
+        self.assertContains(page,'>В интересные</button>')
+        response=self.client.post(url,{'stage':'interesting','return_scope':'all','return_sort':'-amount'})
+        self.assertEqual(response.url,'/workspace/?profile=all&stage=not_participated&sort=-amount')
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.stage,'interesting')
+        self.assertEqual(self.item.expired_from_stage,'')
+        self.assertTrue(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
+
+    def test_decline_interesting_stays_in_category_and_keeps_applied_protected(self):
+        from .models import AnnouncementWatch
+        Favorite.objects.get_or_create(owner=self.owner,lot=self.lot)[0]
+        Favorite.objects.get_or_create(owner=self.other,lot=self.lot)[0]
+        watch=set_watch(owner=self.owner,lot=self.lot,announcement=self.lot.announcement,enabled=True)
+        page=self.client.get('/workspace/',{'profile':self.profile.pk,'stage':'interesting'})
+        self.assertContains(page,'>Не интересно</button>')
+        url=f'/workspace/items/{self.item.pk}/stage/'
+        response=self.client.post(url,{'stage':'not_participated','return_scope':'all','return_sort':'amount'})
+        self.assertEqual(response.url,'/workspace/?profile=all&stage=interesting&sort=amount')
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.stage,'not_participated')
+        self.assertFalse(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
+        self.assertTrue(Favorite.objects.filter(owner=self.other,lot=self.lot).exists())
+        watch.refresh_from_db()
+        self.assertFalse(watch.enabled)
+        self.item.stage='applied';self.item.save()
+        self.client.post(url,{'stage':'not_participated'})
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.stage,'applied')
+
+    def test_decline_cancels_plane_even_when_favorite_is_already_missing(self):
+        from .models import AnnouncementWatch, StatusDelivery
+        watch=set_watch(owner=self.owner,lot=self.lot,announcement=self.lot.announcement,enabled=True,generation='active',lease='running')
+        foreign=set_watch(owner=self.other,lot=self.lot,announcement=self.lot.announcement,enabled=True)
+        delivery=StatusDelivery.objects.create(watch=watch,generation='active',event_key='pending-status')
+        self.client.post(f'/workspace/items/{self.item.pk}/stage/',{'stage':'not_participated'})
+        watch.refresh_from_db();delivery.refresh_from_db();foreign.refresh_from_db()
+        self.assertFalse(watch.enabled)
+        self.assertEqual(watch.lease,'')
+        self.assertEqual(delivery.state,'cancelled')
+        self.assertTrue(foreign.enabled)
+        self.assertEqual(StatusDelivery.objects.filter(watch=watch,event_key__endswith=':stop').count(),1)
+        state=self.client.get('/lots/ui-state/',{'ids':self.lot.pk}).json()['lots'][0]
+        self.assertFalse(state['watched'])
+        self.assertFalse(state['favorite'])
+
     def apply(self):
         self.item.stage='applied';self.item.result_tracking=True;self.item.save()
         return register_watch(self.owner.pk,self.lot.pk)
@@ -196,11 +278,11 @@ class AutomaticWorkflowTests(TestCase):
 
     def test_star_enters_interesting_but_does_not_reset_applied_lot(self):
         self.item.stage='new';self.item.save()
-        Favorite.objects.create(owner=self.owner,lot=self.lot)
+        Favorite.objects.get_or_create(owner=self.owner,lot=self.lot)[0]
         self.item.refresh_from_db();self.assertEqual(self.item.stage,'interesting')
         self.client.post(f'/lots/{self.lot.pk}/price/',{'unit_gross':'116','vat_rate':'16'})
         Favorite.objects.filter(owner=self.owner,lot=self.lot).delete()
-        Favorite.objects.create(owner=self.owner,lot=self.lot)
+        Favorite.objects.get_or_create(owner=self.owner,lot=self.lot)[0]
         self.item.refresh_from_db();self.assertEqual(self.item.stage,'applied')
 
     def test_cancel_mark_unlocks_price_stops_watch_and_can_submit_again(self):

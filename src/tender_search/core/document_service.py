@@ -66,12 +66,15 @@ def download_documents(lot_id, api):
 
 
 def cleanup_documents(announcement_id):
+    from .models import UserLotWorkflow
     paths = []
     with transaction.atomic():
         Announcement.objects.select_for_update().filter(pk=announcement_id).first()
         favorites = Favorite.objects.filter(lot__announcement_id=announcement_id)
+        archived = UserLotWorkflow.objects.filter(lot__announcement_id=announcement_id,stage='archived')
         for doc in Document.objects.filter(announcement_id=announcement_id):
             needed = favorites.filter(lot_id=doc.lot_id).exists() if doc.lot_id else favorites.exists()
+            needed = needed or (archived.filter(lot_id=doc.lot_id).exists() if doc.lot_id else archived.exists())
             if not needed:
                 paths.extend(doc.versions.values_list('storage_path',flat=True))
                 doc.delete()

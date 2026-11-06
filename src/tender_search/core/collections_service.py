@@ -12,7 +12,7 @@ def enqueue_collection(profile_id, *, force=False):
     now = timezone.now()
     with transaction.atomic():
         profile = SearchProfile.objects.select_for_update().filter(pk=profile_id, owner__is_active=True).first()
-        if not profile or (not force and not profile.collection_enabled):
+        if not profile or profile.filters.get('manual') or (not force and not profile.collection_enabled):
             return False
         if profile.collection_lease_until and profile.collection_lease_until > now:
             return False
@@ -44,6 +44,7 @@ def schedule_collections():
 
 def update_collection(profile_id, lease, revision):
     from .index_service import execute_local_search
+    from .workflow_state import inherit_workflows
     profile = SearchProfile.objects.filter(pk=profile_id, collection_lease=lease,
         collection_revision=revision, owner__is_active=True).first()
     if not profile:
@@ -60,6 +61,7 @@ def update_collection(profile_id, lease, revision):
         if job.error or job.status not in ('done', 'partial'):
             raise ValueError('Search failed')
         with transaction.atomic():
+            list(SearchProfile.objects.select_for_update().filter(owner_id=profile.owner_id).order_by('pk'))
             current = SearchProfile.objects.select_for_update().filter(pk=profile_id,
                 collection_lease=lease, collection_revision=revision).first()
             if not current:
@@ -77,12 +79,11 @@ def update_collection(profile_id, lease, revision):
                 seeds = {}
                 for hit in historical.order_by('-search__created_at').values('lot_id', 'terms'):
                     seeds.setdefault(hit['lot_id'], hit['terms'])
-                CollectionLot.objects.bulk_create([CollectionLot(profile=current, lot_id=identifier,
-                    terms=terms, matches_filter=False) for identifier, terms in seeds.items()])
+                CollectionLot.objects.bulk_create(inherit_workflows(current.owner_id, [CollectionLot(profile=current, lot_id=identifier,
+                    terms=terms, matches_filter=False) for identifier, terms in seeds.items()]))
                 old = {item.lot_id: item for item in CollectionLot.objects.filter(profile=current)}
-            CollectionLot.objects.bulk_create([CollectionLot(profile=current, lot_id=h['lot_id'],
-                terms=h['terms'], last_seen_at=now) for h in hits if h['lot_id'] not in old])
-            CollectionLot.objects.filter(profile=current,stage='new',lot_id__in=Favorite.objects.filter(owner=current.owner).values('lot_id')).update(stage='interesting')
+            CollectionLot.objects.bulk_create(inherit_workflows(current.owner_id, [CollectionLot(profile=current, lot_id=h['lot_id'],
+                terms=h['terms'], last_seen_at=now) for h in hits if h['lot_id'] not in old]))
             changed = []
             for hit in hits:
                 if hit['lot_id'] in old and old[hit['lot_id']].terms != hit['terms']:

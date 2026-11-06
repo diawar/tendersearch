@@ -6,6 +6,9 @@ from zipfile import ZipFile
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
+from datetime import timedelta
 from django.utils import timezone
 from pypdf import PdfWriter
 from tender_search.client import Document, SourceError
@@ -77,3 +80,62 @@ class SpecificationTests(TestCase):
             self.client.logout()
             self.assertEqual(self.client.post(endpoint).status_code, 302)
             queued.assert_called_once()
+
+    def test_async_extract_stays_on_card_and_poll_only_sends_changed_content(self):
+        with patch('tender_search.core.tasks.extract_lot_specification.delay'):
+            response = self.client.post(f'/lots/{self.lot.pk}/specification/', HTTP_X_LOT_ASYNC='1')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['queued'])
+        endpoint = f'/lots/{self.lot.pk}/status/'
+        first = self.client.get(endpoint).json()
+        self.assertTrue(first['pending'])
+        self.assertIn('Извлекаем', first['html'])
+        self.assertNotIn('hx-trigger="load delay:2s"', first['html'])
+        with CaptureQueriesContext(connection) as queries:
+            unchanged = self.client.get(endpoint, first['revisions'])
+        self.assertNotIn('html', unchanged.json())
+        self.assertLess(len(unchanged.content), 300)
+        self.assertFalse(any('"core_lotspecification"."documents"' in query['sql'] for query in queries))
+        self.assertEqual(unchanged['Cache-Control'], 'private, no-store')
+        LotSpecification.objects.filter(owner=self.owner).update(state='done', documents=[{'name':'Требования', 'text':'USB 3.0'}], updated_at=timezone.now())
+        completed = self.client.get(endpoint, first['revisions']).json()
+        self.assertFalse(completed['pending'])
+        self.assertIn('USB 3.0', completed['html'])
+        self.assertNotIn('html', self.client.get(endpoint, completed['revisions']).json())
+
+    def test_poll_is_private_does_not_refresh_source_or_write_navigation(self):
+        LotSpecification.objects.create(owner=self.other, lot=self.lot, state='done', documents=[{'text':'Private other user'}])
+        self.lot.checked_at = timezone.now()-timedelta(hours=1)
+        self.lot.save()
+        with patch('tender_search.core.views.queue_refresh') as refresh:
+            response = self.client.get(f'/lots/{self.lot.pk}/status/')
+        refresh.assert_not_called()
+        self.assertNotIn('Private other user', response.json()['html'])
+        self.assertNotIn(f'lot_return_{self.lot.pk}', self.client.session)
+        session = self.client.session
+        session[f'lot_return_{self.lot.pk}'] = '/favorites/'
+        session.save()
+        response = self.client.get(f'/lots/{self.lot.pk}/status/', HTTP_REFERER=f'http://testserver/lots/{self.lot.pk}/')
+        self.assertIn('name="next" value="/favorites/"', response.json()['html'])
+        self.client.logout()
+        self.assertEqual(self.client.get(f'/lots/{self.lot.pk}/status/').status_code, 302)
+
+    def test_stalled_extraction_stops_polling_and_offers_retry(self):
+        job = LotSpecification.objects.create(owner=self.owner, lot=self.lot, state='running')
+        LotSpecification.objects.filter(pk=job.pk).update(updated_at=timezone.now()-timedelta(minutes=16))
+        response = self.client.get(f'/lots/{self.lot.pk}/status/').json()
+        self.assertFalse(response['pending'])
+        self.assertIn('Извлечение не завершилось вовремя', response['html'])
+        job.refresh_from_db()
+        self.assertEqual(job.state, 'error')
+
+    def test_description_displays_repeated_source_lines_once_and_escapes_markup(self):
+        self.lot.description = 'Особое описание\n<script>unsafe</script>\nОсобое описание'
+        self.lot.save()
+        response = self.client.get(f'/lots/{self.lot.pk}/')
+        self.assertContains(response, 'Особое описание', count=1)
+        self.assertContains(response, '&lt;script&gt;unsafe&lt;/script&gt;')
+        self.assertNotContains(response, '<script>unsafe</script>')
+        self.assertContains(response, 'class="lot-conditions"')
+        self.lot.refresh_from_db()
+        self.assertEqual(self.lot.description.count('Особое описание'), 2)

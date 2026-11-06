@@ -57,6 +57,12 @@ def check_lot_outcome(watch_id, lease):
     check_outcome(watch_id, lease)
 
 
+@shared_task(soft_time_limit=240, time_limit=270)
+def check_lot_contract(watch_id, lease):
+    from .contract_service import check_contract
+    check_contract(watch_id, lease)
+
+
 @shared_task(soft_time_limit=600, time_limit=630)
 def extract_lot_specification(job_id, generation):
     from .specification_service import process_specification

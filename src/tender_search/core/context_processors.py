@@ -1,4 +1,4 @@
-from .models import Favorite, TelegramSubscription
+from .models import Favorite, TelegramSubscription, CompanySettings
 from .lot_state import collection_lot_count
 from django.utils.functional import SimpleLazyObject
 
@@ -6,6 +6,7 @@ from django.utils.functional import SimpleLazyObject
 def favorite_counts(request):
     from .user_admin import can_manage_users
     return {"favorite_count": Favorite.objects.filter(owner=request.user).count() if request.user.is_authenticated else 0,
+            "company_bin_missing": SimpleLazyObject(lambda: not CompanySettings.objects.filter(owner=request.user).exclude(company_bin='').exists()) if request.user.is_authenticated else False,
             "collection_count": SimpleLazyObject(lambda: collection_lot_count(request.user)) if request.user.is_authenticated else 0,
             "telegram_connected": request.user.is_authenticated and TelegramSubscription.objects.filter(owner=request.user, enabled=True, chat_id__isnull=False).exists(),
             "can_manage_users": can_manage_users(request.user)}

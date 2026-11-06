@@ -60,6 +60,8 @@ def prefilter(rows, spec, prefixes):
     # Use substring candidates for every mode. Word boundaries, phrases,
     # whole-field matching and exclusions are still checked exactly in Python.
     terms = [normalize(term) for term in spec['terms']]
+    if not terms and any(filters.get(key) for key in ('lot_number', 'announcement_number')):
+        return rows
     def text_condition(term):
         # Phrase mode matches adjacent word prefixes: "беспроводн мыш"
         # matches "беспроводная мышка". Requiring the literal whole phrase

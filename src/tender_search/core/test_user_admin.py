@@ -1,3 +1,4 @@
+from .test_status_watch import set_watch
 from django.contrib.auth import get_user_model
 from django.test import TestCase, Client, override_settings
 
@@ -139,9 +140,9 @@ class UserAdministrationTests(TestCase):
         subscription = TelegramSubscription.objects.create(owner=self.member, enabled=True)
         announcement = Announcement.objects.create(source_id=123, name='Shared announcement')
         lot = Lot.objects.create(source_id=123, announcement=announcement, name='Shared lot')
-        Favorite.objects.create(owner=self.member, lot=lot)
-        kept_favorite = Favorite.objects.create(owner=self.admin, lot=lot)
-        watch = AnnouncementWatch.objects.create(owner=self.member, announcement=announcement,
+        Favorite.objects.get_or_create(owner=self.member, lot=lot)[0]
+        kept_favorite = Favorite.objects.get_or_create(owner=self.admin, lot=lot)[0]
+        watch = set_watch(owner=self.member, announcement=announcement,
                                                 lot=lot, enabled=True)
         delivery = StatusDelivery.objects.create(watch=watch, event_key='test-pending')
         self.client.force_login(self.admin)

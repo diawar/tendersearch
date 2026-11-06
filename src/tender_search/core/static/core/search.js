@@ -204,7 +204,7 @@ document.addEventListener('htmx:beforeRequest',event=>{
   return;
  }
  if(event.detail.elt?.id!=='collection-workspace')return;
- if(document.querySelector('.collection-stage-form[data-dirty="true"], .collection-note-form[data-dirty="true"]')||document.activeElement?.form?.matches('.collection-stage-form, .collection-note-form, .lot-note-form, .lot-price-form'))event.preventDefault();
+ if(document.querySelector('.collection-stage-form[data-dirty="true"], .collection-note-form[data-dirty="true"], .lot-note-form[data-dirty="true"], .lot-price-form[data-dirty="true"]')||document.activeElement?.form?.matches('.collection-stage-form, .collection-note-form, .lot-note-form, .lot-price-form'))event.preventDefault();
 });
 
 // Refresh only personal controls: keep filters, workflow edits and notes intact.
@@ -231,10 +231,15 @@ document.addEventListener('htmx:beforeRequest',event=>{
        const button=actions.querySelector(selector);if(!button)continue;
        button.classList.toggle('selected',selected);button.setAttribute('aria-pressed',String(selected));
        const input=button.form?.elements.namedItem('action');if(input)input.value=selected?on:off;
-       button.title=selector==='.favorite-icon'?(selected?'Убрать из избранного':'В избранное'):(selected?'Отключить':'Включить')+' Telegram-слежение за статусом объявления';
+       if(selector==='.favorite-icon'){
+        button.disabled=(state.locked_lots||[]).includes(lot.id);
+        button.title=button.disabled?'Лот в работе — звезда закреплена за этапом':(selected?'Убрать из избранного':'В избранное');
+       }else{
+        button.disabled=true;
+        button.title='Уведомления '+(selected?'включены':'выключены')+' · определяются этапом лота';
+       }
        button.setAttribute('aria-label',button.title+': '+actions.dataset.lotNumber);
       }
-      const badge=actions.querySelector('.collection-membership');if(badge)badge.hidden=!lot.saved;
      });
     }
    }
