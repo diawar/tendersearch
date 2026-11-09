@@ -217,9 +217,23 @@ class ApplicationPreparation(Timestamped):
     portal_checked_at = models.DateTimeField(null=True, blank=True)
     portal_confirmed_at = models.DateTimeField(null=True, blank=True)
     portal_sync_error = models.CharField(max_length=300, blank=True)
+    portal_description_saved_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=['owner', 'lot'], name='unique_application_preparation')]
+
+
+class DraftQueueItem(Timestamped):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
+    generation = models.UUIDField(default=uuid.uuid4, editable=False)
+    state = models.CharField(max_length=20, default='queued', choices=[
+        ('queued','Ожидает'),('ready','Передано в расширение'),('running','Заполняется'),
+        ('paused','Приостановлено'),('blocked','Требует проверки'),('complete','Черновик готов'),('cancelled','Убрано из очереди')])
+    message = models.CharField(max_length=500, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['owner','lot'], name='unique_draft_queue_lot')]
 
 
 class UserLotNote(Timestamped):
@@ -579,6 +593,13 @@ class UserLotPrice(Timestamped):
 class CompanySettings(Timestamped):
     owner = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     company_bin = models.CharField(max_length=12, blank=True)
+    company_name = models.CharField(max_length=500, blank=True)
+    legal_address = models.CharField(max_length=1000, blank=True)
+    bank_account = models.CharField(max_length=20, blank=True)
+    bank_name = models.CharField(max_length=200, blank=True)
+    bank_bic = models.CharField(max_length=11, blank=True)
+    contact_phone = models.CharField(max_length=25, blank=True)
+    taxpayer_type = models.CharField(max_length=200, blank=True)
 
 
 class LotOutcomeWatch(Timestamped):

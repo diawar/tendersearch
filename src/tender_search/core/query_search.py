@@ -63,6 +63,7 @@ def prefilter(rows, spec, prefixes):
     if not terms and any(filters.get(key) for key in ('lot_number', 'announcement_number')):
         return rows
     def text_condition(term):
+        from tender_search.morphology import phrase_candidate_prefix
         # Phrase mode matches adjacent word prefixes: "беспроводн мыш"
         # matches "беспроводная мышка". Requiring the literal whole phrase
         # in SQL would lose that match. Each prefix is a necessary condition;
@@ -70,8 +71,10 @@ def prefilter(rows, spec, prefixes):
         words = term.split() if spec.get('kind') == 'phrase' else [term]
         condition = Q()
         for word in words:
+            if spec.get('kind')=='phrase':word=phrase_candidate_prefix(word)
+            if not word:continue
             condition &= Q(search_text__contains=word)
-        return condition
+        return condition if condition.children else Q(pk__isnull=False)
     text_unknown = Q(search_text__isnull=True)
     if any(filters.get(key) is not None for key in ('total_price__gte', 'total_price__lte')):
         text_unknown |= Q(search_meta__amount_known=False)
@@ -101,7 +104,7 @@ def candidate_sources(sources, spec, prefixes, owner_id, now):
     # Public IDs only, scoped by owner. Runtime-only profile IDs do not alter
     # matching, and must not create a new cache entry for every monitor run.
     semantic = {key: value for key, value in spec.items() if key not in {'profile_id', 'monitor_profile_id'}}
-    key = hashlib.sha256(json.dumps(['v1', owner_id, semantic, prefixes], sort_keys=True,
+    key = hashlib.sha256(json.dumps(['v2-phrase-morphology', owner_id, semantic, prefixes], sort_keys=True,
                                    ensure_ascii=False).encode()).hexdigest()
     cache = None
     if settings.SEARCH_CANDIDATE_CACHE:

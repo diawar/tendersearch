@@ -1,0 +1,14 @@
+{% extends 'core/base.html' %}{% load static %}
+{% block title %}Отчёт расширения — Госзакупки{% endblock %}
+{% block content %}
+<section class="panel" id="extension-transfer">
+  <h1>Отчёт расширения</h1>
+  <p>Аккаунт: <strong>{{ user.username }}</strong></p>
+  <p id="transfer-result" role="status">Получаем результат проверки…</p>
+  <form id="transfer-form" method="post">{% csrf_token %}</form>
+  <button type="button" class="outline" id="transfer-retry" hidden>Повторить передачу</button>
+  <p id="transfer-links" hidden><a class="outline" id="transfer-lot">Открыть лот</a> <a class="outline" id="transfer-preparation">Посмотреть статус</a></p>
+  <p class="muted">Черновик остаётся на текущем этапе. Подтверждённый статус «Подана» переводит лот в «Подали заявку» и включает проверку итогов. Действия на Госзакупе не выполняются.</p>
+</section>
+<script src="{% static 'core/extension_report.js' %}" defer></script>
+{% endblock %}

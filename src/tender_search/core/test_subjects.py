@@ -12,7 +12,7 @@ class SubjectTests(TestCase):
     def setUp(self):
         self.owner = get_user_model().objects.create_user('subjects-owner')
 
-    def test_legacy_modes_use_keywords_in_form_and_saved_profile(self):
+    def test_supported_modes_and_legacy_keywords_restore_in_form(self):
         from .models import TelegramSubscription
         TelegramSubscription.objects.create(owner=self.owner, enabled=True, chat_id=self.owner.pk)
         from unittest.mock import patch
@@ -23,13 +23,13 @@ class SubjectTests(TestCase):
                     'mode': 'any', 'number_kind': 'lot_number', 'action': 'search'}
             form = SearchForm(data, initial={'kind': old_kind})
             self.assertTrue(form.is_valid(), form.errors)
-            self.assertEqual(form.specification()['kind'], 'contains')
-            self.assertEqual(form.specification()['terms'], expected)
-            self.assertEqual(list(form.fields['kind'].choices), [('contains', 'Ключевое слово')])
+            self.assertEqual(form.specification()['kind'], 'phrase' if old_kind=='phrase' else 'contains')
+            self.assertEqual(form.specification()['terms'], ['беспроводная мышь','игровая клавиатура'] if old_kind=='phrase' else expected)
+            self.assertEqual(list(form.fields['kind'].choices), [('contains', 'Ключевое слово'),('phrase','Ключевая фраза')])
             with patch('tender_search.core.views.tasks.web_search.delay'):
                 response = self.client.post('/search/', data)
             WebSearch.objects.filter(owner=self.owner).update(status='done')
-            self.assertEqual(self.client.get(response.url).context['form']['kind'].value(), 'contains')
+            self.assertEqual(self.client.get(response.url).context['form']['kind'].value(), 'phrase' if old_kind=='phrase' else 'contains')
         self.client.post('/search/', dict(data, action='save'))
         profile = SearchProfile.objects.get(owner=self.owner)
         self.assertEqual(profile.filters['form']['kind'], 'contains')

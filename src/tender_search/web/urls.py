@@ -1,4 +1,5 @@
 from tender_search.core import collection_views
+from tender_search.core import draft_queue
 from django.contrib import admin
 from django.contrib.auth import views as auth_views
 from django.urls import path, re_path
@@ -8,10 +9,16 @@ from tender_search.core.views import dashboard, health
 from tender_search.core import views
 from tender_search.core import lead_views
 from tender_search.core import user_admin
-from tender_search.core.extension_views import download_extension
+from tender_search.core.extension_views import download_extension, receive_extension_report
 from tender_search.core.preparation import prepare_application, export_preparation, import_portal_status
 
 urlpatterns = [
+    path('workspace/drafts/', draft_queue.queue, name='draft_queue'),
+    path('workspace/drafts/add/', draft_queue.enqueue, name='draft_queue_add'),
+    path('workspace/drafts/<int:item_id>/packet/', draft_queue.packet, name='draft_queue_packet'),
+    path('workspace/drafts/<int:item_id>/progress/', draft_queue.progress, name='draft_queue_progress'),
+    path('workspace/drafts/<int:item_id>/cancel/', draft_queue.cancel, name='draft_queue_cancel'),
+    path('settings/extension/report/', receive_extension_report, name='receive_extension_report'),
     path("", dashboard, name="dashboard"),
     path("login/", auth_views.LoginView.as_view(template_name="registration/login.html"), name="login"),
     path("logout/", auth_views.LogoutView.as_view(), name="logout"),

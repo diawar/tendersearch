@@ -1,0 +1,18 @@
+{% extends 'core/base.html' %}{% load static search_tags %}
+{% block title %}Очередь черновиков — Госзакупки{% endblock %}
+{% block content %}
+<div class="page-heading"><h1>Очередь черновиков</h1><a class="outline" href="{% url 'workspace' %}?stage=interesting">К интересным лотам</a></div>
+<section class="panel"><p>Заполняйте по одному лоту. Сохраните подготовку, передайте её расширению и на вкладке Госзакупа нажмите «Создать / продолжить черновик».</p>
+<p class="muted">Оставьте эту страницу открытой в Chrome: прогресс вернётся в очередь автоматически. После закрытия браузера задачи сохранятся; перед повторным запуском проверьте существующую заявку на Госзакупе. Цена, обеспечение, подписание и отправка остаются ручными.</p>
+<a class="outline" href="{% url 'notification_settings' %}#chrome-extension">Скачать расширение и инструкция</a>
+<p id="queue-message" role="status" aria-live="polite"></p><form id="queue-csrf">{% csrf_token %}</form></section>
+{% if items %}<div class="table-wrap panel"><table><thead><tr><th>Лот</th><th>Состояние</th><th>Действия</th></tr></thead><tbody>
+{% for item in items %}<tr data-queue-id="{{ item.pk }}" data-generation="{{ item.generation }}" data-state="{{ item.state }}" data-packet-url="{% url 'draft_queue_packet' item_id=item.pk %}" data-progress-url="{% url 'draft_queue_progress' item_id=item.pk %}">
+<td><a href="{% url 'lot_detail' lot_id=item.lot_id %}">{{ item.lot.name }}</a><small>{{ item.lot.number }} · {{ item.lot.announcement.number }}</small>{% application_portal_status item.lot %}</td>
+<td><strong class="queue-state">{{ item.get_state_display }}</strong><p class="queue-detail">{{ item.message }}</p></td>
+<td><div class="actions"><a class="outline" href="{% url 'application_preparation' lot_id=item.lot_id %}">Подготовка</a>{% if item.state != 'complete' %}<button class="outline queue-start" type="button">Передать в расширение</button>{% endif %}</div>
+{% if item.state != 'complete' %}<label class="preparation-repeat"><input class="queue-repeat" type="checkbox"> Один товар для всех позиций этого лота</label>{% endif %}
+<form method="post" action="{% url 'draft_queue_cancel' item_id=item.pk %}">{% csrf_token %}<button type="submit" class="outline queue-remove" {% if item.state == 'running' %}disabled{% endif %}>Убрать из очереди</button></form></td></tr>{% endfor %}
+</tbody></table></div>{% else %}<section class="panel"><p>Очередь пуста. В «Интересных лотах» выберите до 20 лотов и нажмите «В очередь черновиков».</p></section>{% endif %}
+<script defer src="{% static 'core/draft_queue.js' %}"></script>
+{% endblock %}

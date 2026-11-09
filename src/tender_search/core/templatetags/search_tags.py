@@ -1,34 +1,42 @@
 import re
-from tender_search.matching import phrase_pattern
+from tender_search.matching import normalize, prepared_phrase
 from django import template
 from django.utils.html import format_html_join, format_html
 
 register = template.Library()
 
 
+@register.simple_tag(name='budget_unit_price')
+def budget_unit_price_tag(lot):
+    from tender_search.core.lot_pricing import budget_unit_price
+    return budget_unit_price(lot)
+
+
+@register.simple_tag
+def lot_status(lot):
+    watch=getattr(lot,'outcome_watch',None)
+    if watch and watch.state in ('won','lost') and watch.protocol_url:
+        return 'Итоги опубликованы'
+    return lot.status or 'Не указан'
+
+
 @register.simple_tag
 def application_portal_status(lot):
     item=getattr(lot,'preparation',None)
     if not item:return ''
-    title={'draft':'Черновик создан','submitted':'Заявка подана'}.get(item.portal_state,'Данные подготовлены · черновик не подтверждён')
+    title={'draft':'Черновик создан','submitted':'Заявка подана','completed':'Заявка завершена на портале'}.get(item.portal_state,'Данные подготовлены · черновик не подтверждён')
     if item.portal_sync_error:title+=' · требуется проверка'
-    return format_html('<span class="badge" title="По последнему отчёту расширения; актуальность проверяйте в карточке заявки">{}</span>',title)
+    status=format_html('<span class="badge" title="По последнему отчёту расширения; актуальность проверяйте в карточке заявки">{}</span>',title)
+    link=format_html(' <a href="{}" target="_blank" rel="noopener noreferrer">№{}</a>',item.portal_url,item.portal_number) if item.portal_number and item.portal_url else ''
+    description=format_html(' <span class="badge">{}</span>','Описание товара заполнено') if item.portal_description_saved_at else ''
+    return format_html('{}{}{}',status,link,description)
 
 
 @register.simple_tag
 def participation_warning(lot):
-    if lot.announcement.source != 'zakup':
-        return ''
-    raw = lot.raw or {}
-    system = raw.get('system') or (lot.announcement.raw or {}).get('system') or {}
-    system_id = str((system.get('id') if isinstance(system, dict) else system) or raw.get('system_id') or '')
-    if system_id and system_id != '1':
-        return ''
-    # Empty public flags do not prove eligibility. Do not infer permission or
-    # a specific national-regime restriction from a product name/code alone.
-    return format_html('<a class="participation-warning" href="{}" target="_blank" rel="noopener noreferrer" '
-        'title="Публичные данные не подтверждают допуск вашей компании. На портале проверьте ограничения национального режима и требования к реестрам поставщиков.">'
-        '⚠ Допуск требует проверки</a>', lot.portal_url)
+    # Unknown eligibility is not evidence of a restriction. Do not show an
+    # alarming per-lot badge until a specific portal restriction is verified.
+    return ''
 
 
 @register.simple_tag
@@ -66,10 +74,21 @@ def highlight(value, terms):
     terms = [t for t in terms if t]
     if not terms:
         return text
-    pattern = "(" + "|".join(phrase_pattern(t) if len(t.split()) > 1 else r"(?<!\w)" + re.escape(t)
-                             for t in sorted(terms, key=len, reverse=True)) + ")"
-    pieces = re.split(pattern, text, flags=re.IGNORECASE)
-    return format_html_join("", "{}", ((format_html("<mark>{}</mark>", piece) if index % 2 else piece,) for index, piece in enumerate(pieces)))
+    spans=[]
+    for term in terms:
+        if len(term.split())>1:
+            spans.extend(prepared_phrase(normalize(term)).spans(text))
+        else:
+            spans.extend(match.span() for match in re.finditer(r'(?<!\w)'+re.escape(term),text,re.IGNORECASE))
+    merged=[]
+    for start,end in sorted(set(spans)):
+        if merged and start<merged[-1][1]:merged[-1]=(merged[-1][0],max(end,merged[-1][1]))
+        else:merged.append((start,end))
+    pieces=[];position=0
+    for start,end in merged:
+        pieces.extend([text[position:start],format_html('<mark>{}</mark>',text[start:end])]);position=end
+    pieces.append(text[position:])
+    return format_html_join('', '{}', ((piece,) for piece in pieces))
 
 
 @register.simple_tag

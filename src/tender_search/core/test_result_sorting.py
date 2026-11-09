@@ -58,7 +58,7 @@ class ResultSortingTests(TestCase):
         soup = BeautifulSoup(response.content, 'html.parser')
         amount = soup.select_one('th a.sort-heading')
         query = parse_qs(urlsplit(amount['href']).query)
-        self.assertEqual(query, {'sort': ['-amount'], 'remaining': ['2']})
+        self.assertEqual(query, {'sort': ['-amount'], 'remaining': ['2'], 'per_page':['20']})
         self.assertEqual(amount.find_parent('th')['aria-sort'], 'ascending')
         self.assertEqual(amount['hx-target'], '#search-results')
         self.assertEqual(len(soup.select('.date-sort-links a')), 2)
@@ -73,8 +73,8 @@ class ResultSortingTests(TestCase):
         soup = BeautifulSoup(response.content, 'html.parser')
         next_link = soup.select_one('.pagination a')
         self.assertEqual(parse_qs(urlsplit(next_link['href']).query),
-                         {'page': ['2'], 'sort': ['amount'], 'remaining': ['2']})
-        self.assertEqual(self.ids(self.fetch('amount', remaining='2', page='2')), [29, 30, 31])
+                         {'page': ['2'], 'sort': ['amount'], 'remaining': ['2'], 'per_page':['20']})
+        self.assertEqual(self.ids(self.fetch('amount', remaining='2', page='2')), list(range(24,32)))
         for link in soup.select('.view-switch a, .deadline-filters a'):
             self.assertEqual(parse_qs(urlsplit(link['href']).query)['sort'], ['amount'])
         self.assertContains(self.fetch('amount', view='cards'), 'results-grid')

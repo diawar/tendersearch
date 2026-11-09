@@ -1,12 +1,20 @@
 {
   "manifest_version": 3,
   "name": "Госзакупки — помощник черновиков",
-  "version": "0.2.2",
-  "description": "Проверка формы и заполнение текстовых полей. Без подписания и подачи.",
+  "version": "0.9.2",
+  "description": "Подготовка черновика ЗЦП и проверка статуса. Без подписания и подачи.",
   "permissions": [
     "activeTab",
-    "scripting"
+    "scripting",
+    "storage"
   ],
+  "background": {"service_worker": "background.js"},
+  "content_scripts": [{
+    "matches": ["http://localhost/lots/*/preparation/*", "http://127.0.0.1/lots/*/preparation/*", "http://localhost/workspace/drafts/", "http://127.0.0.1/workspace/drafts/"],
+    "js": ["bridge-config.js", "bridge.js"],
+    "run_at": "document_idle",
+    "all_frames": false
+  }],
   "action": {
     "default_popup": "popup.html"
   }

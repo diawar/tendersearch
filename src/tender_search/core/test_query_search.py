@@ -96,6 +96,20 @@ class PostgreSQLSearchTests(TestCase):
         IndexedLot.objects.update(search_text=None, search_meta=None, search_fingerprint=None)
         self.assertEqual(self.search(self.spec)[1], self.search(self.spec, enabled=False)[1])
 
+    def test_inflections_and_suppletive_forms_survive_sql_and_cache(self):
+        put(row(801,announcement_id=1801,name_ru='Для беспроводной мыши',description_ru=''))
+        put(row(802,announcement_id=1802,name_ru='Для новых людей',description_ru=''))
+        put(row(803,announcement_id=1803,name_ru='Беспроводной комплект клавиатура и мышь',description_ru=''))
+        for term,identifier in [('беспроводная мышь',801),('новый человек',802)]:
+            spec=dict(self.spec,kind='phrase',terms=[term])
+            baseline,expected=self.search(spec,enabled=False)
+            optimized,actual=self.search(spec,cache=True)
+            self.assertFalse(optimized.error)
+            self.assertEqual(actual,expected)
+            self.assertTrue(any(item[1]==identifier for item in actual))
+            self.assertFalse(any(item[1]==803 for item in actual))
+            self.assertEqual(self.search(spec,cache=True)[1],expected)
+
     def test_cache_hits_and_index_writes_invalidate_it(self):
         first, expected = self.search(self.spec, cache=True)
         second, actual = self.search(self.spec, cache=True)

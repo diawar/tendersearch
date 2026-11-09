@@ -1,6 +1,7 @@
 """Deterministic local matching; never treat user search terms as regexes."""
 import re
 import unicodedata
+from functools import lru_cache
 
 
 def normalize(text):
@@ -12,6 +13,12 @@ def phrase_pattern(term):
     return r"(?<!\w)" + r"\s+".join(re.escape(word) + r"\w*" for word in term.split())
 
 
+@lru_cache(maxsize=2048)
+def prepared_phrase(term):
+    from .morphology import PhraseMatcher
+    return PhraseMatcher(term,phrase_pattern(term))
+
+
 def matches(text, term, kind="contains"):
     text, term = normalize(text), normalize(term)
     if not term:
@@ -19,7 +26,7 @@ def matches(text, term, kind="contains"):
     if kind == "field":
         return text == term
     if kind == "phrase":
-        return bool(re.search(phrase_pattern(term), text))
+        return prepared_phrase(term).search(text)
     if kind == "word":
         return bool(re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", text))
     if kind == "substring":
@@ -42,12 +49,12 @@ class PreparedMatcher:
             pattern = None
             if term and self.kind not in {'field', 'substring'}:
                 if self.kind == 'phrase':
-                    expression = phrase_pattern(term)
+                    pattern = prepared_phrase(term)
                 elif self.kind == 'word':
                     expression = r'(?<!\w)' + re.escape(term) + r'(?!\w)'
                 else:
                     expression = r'(?<!\w)' + re.escape(term)
-                pattern = re.compile(expression)
+                if self.kind!='phrase':pattern = re.compile(expression)
             included.append((original, term, pattern))
         self.included = tuple(included)
         filters = specification.get('filters', {})

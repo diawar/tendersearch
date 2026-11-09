@@ -161,6 +161,8 @@ def search_cancel(request, job_id):
 
 @login_required
 def search_results(request, job_id):
+    from .pagination import page_settings
+    pagination=page_settings(request,'search')
     if request.GET.get("view") in {"table", "cards"}:
         request.session["result_view"] = request.GET["view"]
     job = get_object_or_404(WebSearch, pk=job_id, owner=request.user)
@@ -202,12 +204,12 @@ def search_results(request, job_id):
     for key, label in [('amount', 'Сумма, ₸'), ('start', 'Начало'), ('end', 'Окончание')]:
         active = sort_key == key
         next_sort = ('-' if active and not descending else '') + key
-        url = f'?sort={next_sort}' + (f'&remaining={remaining_days}' if remaining_days else '')
+        url = f'?sort={next_sort}&per_page={pagination["per_page"]}' + (f'&remaining={remaining_days}' if remaining_days else '')
         sort_headers[key] = {'label': label, 'url': url,
             'arrow': ('↓' if descending else '↑') if active else '↕',
             'aria': ('descending' if descending else 'ascending') if active else 'none'}
     labels = {'amount': 'По сумме', 'start': 'По началу подачи', 'end': 'По окончанию подачи'}
-    sort_context = {'result_sort': selected_sort if sort_key != 'published' else '',
+    sort_context = {**pagination,'result_sort': selected_sort if sort_key != 'published' else '',
         'result_sort_label': (labels[sort_key] + (' ↓' if descending else ' ↑')) if sort_key in labels else 'Сначала новые',
         'sort_headers': sort_headers}
     excluded_terms = job.specification.get("exclude", [])
@@ -215,7 +217,7 @@ def search_results(request, job_id):
         excluded_ids = [identifier for identifier, name, description in hits.values_list("pk", "lot__name", "lot__description").iterator()
                         if any(matches(f"{name}\n{description}", term, "substring") for term in excluded_terms)]
         hits = hits.exclude(pk__in=excluded_ids)
-    page = Paginator(hits, 25).get_page(request.GET.get("page"))
+    page = Paginator(hits, pagination['per_page']).get_page(request.GET.get("page"))
     result_context(request, [hit.lot for hit in page])
     if request.headers.get("HX-Request"):
         # Filtering, pagination and polling only replace the results block.
@@ -514,7 +516,8 @@ def notification_settings(request):
     from .telegram_service import connection_link
     from .forms import CompanySettingsForm
     company = CompanySettings.objects.filter(owner=request.user).first()
-    company_form = CompanySettingsForm(request.POST if request.method == 'POST' and request.POST.get('action') == 'company' else None, initial={'company_bin':company.company_bin if company else ''})
+    company_form = CompanySettingsForm(request.POST if request.method == 'POST' and request.POST.get('action') == 'company' else None,
+        initial={key:getattr(company,key,'') for key in CompanySettingsForm.base_fields})
     sub = TelegramSubscription.objects.filter(owner=request.user).first()
     link = None
     if request.method == "POST":
@@ -522,8 +525,13 @@ def notification_settings(request):
             if company_form.is_valid():
                 from .outcome_service import reset_company
                 from django.contrib import messages
-                reset_company(request.user.pk, company_form.cleaned_data['company_bin'])
-                messages.success(request, 'БИН компании сохранён.')
+                with transaction.atomic():
+                    reset_company(request.user.pk, company_form.cleaned_data['company_bin'])
+                    current=CompanySettings.objects.select_for_update().get(owner=request.user)
+                    for key,value in company_form.cleaned_data.items():
+                        if key!='company_bin' and key in request.POST:setattr(current,key,value)
+                    current.save()
+                messages.success(request, 'Реквизиты компании сохранены.')
                 return redirect('notification_settings')
         elif request.POST.get("action") == "connect" and settings.TELEGRAM_POLLING_ENABLED and settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_BOT_USERNAME:
             link = connection_link(request.user)
@@ -537,7 +545,9 @@ def notification_settings(request):
             return redirect("notification_settings")
     context = {"company_form":company_form,"subscription":sub,"telegram_polling_enabled":settings.TELEGRAM_POLLING_ENABLED,"telegram_ready":bool(settings.TELEGRAM_BOT_TOKEN and settings.TELEGRAM_BOT_USERNAME),"telegram_bot_username":settings.TELEGRAM_BOT_USERNAME,"connect_link":link}
     template = "core/_telegram_status.html" if request.headers.get("HX-Request") else "core/settings.html"
-    return render(request,template,context)
+    response=render(request,template,context)
+    response['Cache-Control']='no-store, private'
+    return response
 
 
 @login_required

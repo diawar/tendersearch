@@ -21,6 +21,8 @@ STEPS = [('all', 'Неразобранные лоты'), ('interesting', 'Инт
 
 @login_required
 def collections(request):
+    from .pagination import page_settings
+    pagination=page_settings(request,'workspace')
     profiles = list(SearchProfile.objects.filter(owner=request.user).order_by('created_at', 'pk'))
     selected = request.GET.get('profile')
     aggregate = not selected or selected == 'all'
@@ -35,7 +37,7 @@ def collections(request):
     allowed_sorts = {prefix+key for prefix in ('', '-') for key in sort_fields}
     if selected_sort not in allowed_sorts:
         selected_sort = ''
-    context = {'collection_sort': selected_sort, 'profiles': profiles, 'active_collection': profile, 'aggregate_collection': aggregate,
+    context = {**pagination,'collection_sort': selected_sort, 'profiles': profiles, 'active_collection': profile, 'aggregate_collection': aggregate,
                'collection_key': 'all' if aggregate else str(profile.pk), 'stage': stage,
                'stage_choices': CollectionLot.STAGES, 'outcome_choices': CollectionLot.OUTCOMES,
                'telegram_connected': TelegramSubscription.objects.filter(owner=request.user, enabled=True, chat_id__isnull=False).exists()}
@@ -69,10 +71,10 @@ def collections(request):
             active = key == name
             descending = selected_sort.startswith('-')
             target = ('-' if active and not descending else '') + name
-            headers[name] = {'label': label, 'url': '?' + urlencode({'profile': context['collection_key'], 'stage': stage, 'sort': target}),
+            headers[name] = {'label': label, 'url': '?' + urlencode({'profile': context['collection_key'], 'stage': stage, 'sort': target,'per_page':pagination['per_page']}),
                 'arrow': ('↓' if descending else '↑') if active else '↕', 'aria': ('descending' if descending else 'ascending') if active else 'none'}
         context['sort_headers'] = headers
-        page = Paginator(records.select_related('lot__announcement', 'lot__customer').order_by(*order), 25).get_page(request.GET.get('page'))
+        page = Paginator(records.select_related('lot__announcement', 'lot__customer').order_by(*order), pagination['per_page']).get_page(request.GET.get('page'))
         from .views import result_context
         result_context(request, [record.lot for record in page])
         notes = dict(UserLotNote.objects.filter(owner=request.user,

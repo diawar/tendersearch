@@ -259,6 +259,9 @@ def cancel_application(owner, lot):
     """Undo the app's test submission mark; never contact the procurement portal."""
     with transaction.atomic():
         list(SearchProfile.objects.select_for_update().filter(owner=owner).order_by('pk'))
+        from .models import ApplicationPreparation
+        if ApplicationPreparation.objects.filter(owner=owner,lot=lot,portal_state__in=('submitted','completed')).exists():
+            raise ValueError('Подача подтверждена порталом. Тестовая отмена отметки недоступна.')
         items=list(CollectionLot.objects.select_for_update().filter(profile__owner=owner,lot=lot))
         applied=[item for item in items if item.stage=='applied']
         price=UserLotPrice.objects.select_for_update().filter(owner=owner,lot=lot).first()

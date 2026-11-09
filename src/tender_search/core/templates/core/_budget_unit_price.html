@@ -1,0 +1,1 @@
+{% load search_tags %}{% budget_unit_price lot as unit_price %}<small class="budget-unit-price" title="{% if unit_price is not None %}По общей сумме и подтверждённому количеству одной позиции лота{% else %}Нет подтверждённых данных для цены за единицу{% endif %}">За единицу: {% if unit_price is not None %}{{ unit_price|floatformat:'2g' }} ₸{% else %}—{% endif %}</small>

@@ -18,8 +18,22 @@ class ExtensionDownloadTests(TestCase):
             self.assertEqual(set(archive.namelist()),{'goszakup-assistant/'+name for name in FILES})
             manifest=json.loads(archive.read('goszakup-assistant/manifest.json'))
             self.assertEqual(manifest['manifest_version'],3)
-            self.assertEqual(set(manifest['permissions']),{'activeTab','scripting'})
+            self.assertEqual(set(manifest['permissions']),{'activeTab','scripting','storage'})
+            self.assertEqual(manifest['background']['service_worker'],'background.js')
             self.assertNotIn('host_permissions',manifest)
+            self.assertFalse(manifest['content_scripts'][0]['all_frames'])
+            self.assertNotIn('https://zakup.gov.kz/*',manifest['content_scripts'][0]['matches'])
         self.assertContains(self.client.get('/settings/'),'Загрузить распакованное расширение')
         self.assertContains(self.client.get('/settings/'),'/settings/extension/download/')
         self.assertEqual(self.client.post('/settings/extension/download/').status_code,405)
+
+    @override_settings(ALLOWED_HOSTS=['app.example.test'])
+    def test_download_pairs_bridge_with_own_server_origin(self):
+        self.client.force_login(get_user_model().objects.create_user('server-extension-user'))
+        response=self.client.get('/settings/extension/download/',secure=True,HTTP_HOST='app.example.test')
+        with ZipFile(BytesIO(response.content)) as archive:
+            config=archive.read('goszakup-assistant/bridge-config.js').decode()
+            self.assertIn('https://app.example.test',config)
+            manifest=json.loads(archive.read('goszakup-assistant/manifest.json'))
+            self.assertIn('https://app.example.test/lots/*/preparation/*',manifest['content_scripts'][0]['matches'])
+            self.assertNotIn('<all_urls>',json.dumps(manifest))

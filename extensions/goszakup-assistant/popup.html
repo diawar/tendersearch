@@ -1,1 +1,68 @@
-<!doctype html><html lang="ru"><meta charset="utf-8"><link rel="stylesheet" href="popup.css"><title>Подготовка заявки</title><h1>Помощник черновиков</h1><p>Откройте кабинет zakup.gov.kz. Вход через ЭЦП выполняйте самостоятельно.</p><label>Данные из нашего приложения <input id="file" type="file" accept=".json,application/json"></label><p id="packet"></p><button id="inspect">Проверить форму</button><button id="fill" disabled>Заполнить текстовые поля</button><p>Сохранение, переходы, обеспечение, цена и подача остаются ручными в этой тестовой версии.</p><button id="status" disabled>Проверить статус в «Моих заявках»</button><button id="download" disabled>Скачать отчёт проверки</button><pre id="result" role="status"></pre><script src="status.js"></script><script src="popup.js"></script></html>
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="popup.css">
+  <title>Госзакупки · помощник</title>
+</head>
+<body>
+  <header class="header">
+    <div class="brand-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m3 9 9-5 9 5M4 10h16M6 10v8m6-8v8m6-8v8M3 20h18"/></svg></div>
+    <div class="brand"><strong>Госзакупки</strong><span>Помощник в кабинете поставщика</span></div>
+    <span class="version">0.9.2</span>
+  </header>
+  <main>
+    <section class="card" aria-labelledby="draft-title">
+      <h2 id="draft-title">Черновик ЗЦП</h2>
+      <p class="description">В нашем приложении нажмите «Подготовить черновик». На открывшейся вкладке Госзакупа запустите заполнение этой кнопкой. Данные из JSON можно загрузить вручную ниже.</p>
+      <p id="draft-state" role="status" aria-live="polite">Подготовка не загружена.</p>
+      <button id="draft-start" class="button primary" disabled>Создать / продолжить черновик</button>
+      <button id="draft-stop" class="button secondary" disabled>Остановить заполнение</button>
+      <button id="draft-clear" class="button secondary" disabled>Очистить подготовку расширения</button>
+      <p class="hint">Цена, обеспечение, подписание и отправка остаются ручными. Закрытие окна расширения не останавливает текущий шаг. Данные хранятся до закрытия браузера.</p>
+    </section>
+
+    <section class="card" aria-labelledby="status-title">
+      <div class="card-heading"><h1 id="status-title">Проверка заявки</h1><span class="site-label">zakup.gov.kz</span></div>
+      <p class="description">Откройте «Мои заявки» и укажите данные из одной строки. Файл JSON не нужен.</p>
+      <label for="company_bin">БИН организации</label>
+      <input id="company_bin" type="text" inputmode="numeric" maxlength="12" placeholder="12 цифр" autocomplete="off" spellcheck="false">
+      <div class="field-row">
+        <div><label for="announcement_number">Номер объявления</label><input id="announcement_number" type="text" placeholder="17896678-1" autocomplete="off" spellcheck="false"></div>
+        <div><label for="lot_number">Номер лота</label><input id="lot_number" type="text" placeholder="88391354-ЗЦП2" autocomplete="off" spellcheck="false"></div>
+      </div>
+      <button id="status" class="button primary"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg><span id="status-label">Проверить статус</span></button>
+      <p class="caption">Только чтение · заявка не изменяется</p>
+    </section>
+
+    <section id="result-card" class="card result-card" hidden aria-labelledby="result-title">
+      <div class="result-heading"><span id="result-mark" class="result-mark" aria-hidden="true">i</span><div><h2 id="result-title">Результат проверки</h2><p id="result-summary" role="status" aria-live="polite"></p></div></div>
+      <div class="transfer-controls"><label for="app-url">Адрес нашего приложения</label><input id="app-url" type="text" value="http://localhost:8000" spellcheck="false" autocomplete="off"><button id="send" class="button primary" disabled>Передать в приложение</button><p class="hint">Войдите в приложение заранее. Лот должен быть в вашем рабочем пространстве. Подтверждение сохранения появится на сайте.</p></div>
+      <button id="download" class="button secondary" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/></svg>Скачать отчёт файлом</button>
+      <details class="raw-result"><summary>Подробности · JSON</summary><pre id="result"></pre></details>
+    </section>
+
+
+
+    <details class="card tool-section">
+      <summary><span class="tool-icon" aria-hidden="true">↥</span><span>Данные для заполнения<small>Загрузка подготовки из приложения</small></span><span class="chevron" aria-hidden="true">⌄</span></summary>
+      <div class="tool-body">
+        <p class="description">Выберите свежий JSON, скачанный в карточке интересного лота. Для создания черновика нужны ЗЦП и заполненные реквизиты.</p>
+        <label><input id="repeat-product" type="checkbox"> Один и тот же товар для всех позиций этого лота</label>
+        <label class="file-label" for="file">Файл подготовки</label><input id="file" type="file" accept=".json,application/json">
+        <p id="packet" class="packet"></p>
+        <button id="fill" class="button secondary" disabled>Заполнить текстовые поля</button>
+        <p class="hint">Эта отдельная кнопка только переносит текст в уже открытую форму.</p>
+      </div>
+    </details>
+
+    <details class="card tool-section">
+      <summary><span class="tool-icon" aria-hidden="true">⌘</span><span>Диагностика страницы<small>Поля и структура открытой формы</small></span><span class="chevron" aria-hidden="true">⌄</span></summary>
+      <div class="tool-body"><p class="description">Для проверки совместимости расширения с порталом. Значения полей и данные ЭЦП не считываются.</p><button id="inspect" class="button secondary">Проверить форму</button></div>
+    </details>
+    <footer>ЭЦП и пароль расширению не передаются.<br>Статус «Завершена» не означает победу или проигрыш.</footer>
+  </main>
+  <script src="status.js"></script><script src="popup.js"></script>
+</body>
+</html>

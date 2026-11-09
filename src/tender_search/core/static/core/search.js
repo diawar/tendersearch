@@ -10,14 +10,18 @@ function updateIndexTimer(){
 updateIndexTimer();
 setInterval(updateIndexTimer,1000);
 document.addEventListener('htmx:afterSwap',updateIndexTimer);
-function splitSearchTags(value){
- return [...new Set(value.split(/[\s;,]+/).map(s=>s.trim().replace(/\s+/g,' ')).filter(Boolean))];
+function splitSearchTags(value,kind='contains'){
+ return [...new Set(value.split(kind==='phrase'?/[\n\r\t;,]+/:/[\s;,]+/).map(s=>s.trim().replace(/\s+/g,' ')).filter(Boolean))];
 }
 document.querySelectorAll('[data-tags]').forEach(editor => {
  const source=editor.querySelector('textarea'), list=editor.querySelector('.tag-list'), entry=editor.querySelector('.tag-entry');
  const form=editor.closest('form');
- const parse=value=>splitSearchTags(value);
- const delimiter=key=>['Enter',';',' ', ','].includes(key);
+ const phraseMode=()=>editor.dataset.tags==='terms'&&form.elements.namedItem('kind')?.value==='phrase';
+ const parse=value=>splitSearchTags(value,phraseMode()?'phrase':'contains');
+ const delimiter=(key,value)=>phraseMode()?(['Enter',';',','].includes(key)||(key==='Tab'&&value.trim())):['Enter',';',' ', ','].includes(key);
+ function updateEntry(){entry.placeholder=phraseMode()?'Введите фразу · Enter или Tab — следующая':'Введите слово и нажмите пробел';entry.setAttribute('aria-label',phraseMode()?'Добавить ключевую фразу':(editor.dataset.tags==='exclude'?'Добавить исключение':'Добавить ключевое слово'));}
+ if(editor.dataset.tags==='terms')form.elements.namedItem('kind')?.addEventListener('change',()=>{tags=parse([...tags,entry.value].join('; '));entry.value='';updateEntry();render();});
+ updateEntry();
  let tags=parse(source.value); source.hidden=true; source.required=false;
  editor.addEventListener('remove-term',event=>{tags=tags.filter(term=>term!==event.detail);render();});
  const sync=()=>{source.value=tags.join('; ');source.dispatchEvent(new Event('change',{bubbles:true}));};
@@ -31,7 +35,7 @@ document.querySelectorAll('[data-tags]').forEach(editor => {
     const input=document.createElement('input');input.value=text;input.maxLength=150;input.className='tag-inline';chip.replaceChildren(input);
     let done=false;
     const finish=()=>{if(done)return;done=true;tags.splice(index,1,...parse(input.value));tags=[...new Set(tags)];render();};
-    input.onkeydown=e=>{if(delimiter(e.key)){e.preventDefault();finish();entry.focus();}if(e.key==='Escape'){done=true;render();}};
+    input.onkeydown=e=>{if(!e.isComposing&&delimiter(e.key,input.value)){e.preventDefault();finish();entry.focus();}if(e.key==='Escape'){done=true;render();}};
     input.onblur=finish;input.focus();input.select();
    };
    const remove=document.createElement('button');remove.type='button';remove.append(tagIcon('x'));remove.setAttribute('aria-label','Удалить '+text);
@@ -43,7 +47,7 @@ document.querySelectorAll('[data-tags]').forEach(editor => {
   if(values.some(s=>s.length>150)){entry.setCustomValidity('Тег не должен быть длиннее 150 символов.');entry.reportValidity();return false;}
   tags=[...new Set([...tags,...values])];entry.value='';entry.setCustomValidity('');render();return true;
  }
- entry.addEventListener('keydown',e=>{if(delimiter(e.key)){e.preventDefault();add();}});
+ entry.addEventListener('keydown',e=>{if(!e.isComposing&&delimiter(e.key,entry.value)){e.preventDefault();add();}});
  entry.addEventListener('input',()=>entry.setCustomValidity(''));
  entry.addEventListener('blur',()=>{if(entry.value.trim())add();});
  form.addEventListener('submit',e=>{if(!add())e.preventDefault();});
@@ -150,7 +154,7 @@ if(conditionsForm&&liveConditions){
    if(removable){const button=document.createElement('button');button.type='button';button.className='remove-filter';button.dataset.conditionField=field;button.dataset.conditionValue=val;if(selectedValues)button.dataset.conditionValues=JSON.stringify(selectedValues);button.setAttribute('aria-label','Убрать условие: '+label);button.append(tagIcon('x'));chip.append(button);}
    liveConditions.append(chip);
   };
-  const words=name=>splitSearchTags(value(name));
+  const words=name=>splitSearchTags(value(name),name==='terms'?value('kind'):'contains');
   words('terms').forEach(word=>add(word,'terms',word,'condition-keyword'));
   for(const [name,label] of [['amount_min','Сумма от'],['amount_max','Сумма до'],['customer_bin','БИН заказчика']]){if(value(name))add(label+': '+value(name)+(name.startsWith('amount')?' ₸':''),name,value(name),'condition-procurement');}
   for(const [name,label] of [['status','Статус'],['method','Способ закупки'],['region','Область'],['city','Город']]){
@@ -259,3 +263,5 @@ document.addEventListener('htmx:beforeRequest',event=>{
  document.addEventListener('visibilitychange',schedule);
  setInterval(schedule,30000);
 })();
+
+document.addEventListener("change",event=>{if(event.target.matches("select[data-page-size]"))event.target.form.requestSubmit();});

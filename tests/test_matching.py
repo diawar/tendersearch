@@ -33,6 +33,13 @@ from tender_search.core.templatetags.search_tags import highlight
     ("Сверхбеспроводная мышь", "беспроводн мыш", "phrase", False),
     ("Беспроводной промышленный", "беспроводн мыш", "phrase", False),
     ("Беспроводная мышка", "беспроводная мышь", "phrase", False),
+    ("Радиус действия беспроводной мыши", "беспроводная мышь", "phrase", True),
+    ("Подключение беспроводных мышей", "беспроводная мышь", "phrase", True),
+    ("Для новых людей", "новый человек", "phrase", True),
+    ("Мыши беспроводные", "беспроводная мышь", "phrase", False),
+    ("Сверхбеспроводной мыши", "беспроводная мышь", "phrase", False),
+    ("Беспроводной комплект и мышь", "беспроводная мышь", "phrase", False),
+    ("Промышленные мышечные ткани", "беспроводная мышь", "phrase", False),
 ])
 def test_matching_semantics(text, term, kind, expected):
     assert matches(text, term, kind) is expected
@@ -94,3 +101,8 @@ def test_highlight_phrase_prefixes_only_when_adjacent():
     assert str(highlight('Беспроводную мышь', ['беспроводн мыш'])) == '<mark>Беспроводную мышь</mark>'
     text = 'Беспроводной комплект клавиатура и мышь'
     assert str(highlight(text, ['беспроводн мыш'])) == text
+
+
+def test_highlight_inflected_phrase_preserves_source_and_escapes_html():
+    assert str(highlight('Для беспроводной мыши', ['беспроводная мышь'])) == 'Для <mark>беспроводной мыши</mark>'
+    assert str(highlight('<img> беспроводной мыши', ['беспроводная мышь'])) == '&lt;img&gt; <mark>беспроводной мыши</mark>'

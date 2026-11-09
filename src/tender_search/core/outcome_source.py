@@ -24,6 +24,19 @@ def normalize_number(value):
     return compact(str(value)).upper().replace('–','-').replace('—','-')
 
 
+def protocol_confirms_announcement(text, expected):
+    expected=normalize_number(expected)
+    if not expected:return False
+    if re.search(r'(?<![\w-])'+re.escape(expected)+r'(?![\w-])',text,re.I):return True
+    # New cabinet: 17896678-1; published ZCP protocol: 17896678-ЗЦП1.
+    # Bind both the base ID and revision, and only accept this observed format
+    # in the protocol's announcement heading (never an unrelated lot number).
+    match=re.fullmatch(r'(\d+)-(\d+)',expected)
+    if not match:return False
+    canonical=match[1]+'-ЗЦП'+match[2]
+    return bool(re.search(r'(?im)^\s*(?:№\s*закупки|Протокол\s+об\s+итогах|Сатып\s*алудың\s*№|Қорытынды\s+туралы\s+хаттама)\s*:?\s*'+re.escape(canonical)+r'(?![\w-])',text))
+
+
 def protocol_text(data):
     if data.lstrip().startswith(b'<'):
         soup=BeautifulSoup(data,'html.parser')
@@ -48,7 +61,7 @@ def parse_lot_result(text, announcement_number, lot_number, company_bin):
     text=text.replace('–','-').replace('—','-')
     number=normalize_number(lot_number)
     expected=normalize_number(announcement_number)
-    if not expected or not re.search(r'(?<![\w-])'+re.escape(expected)+r'(?![\w-])',text,re.I):
+    if not protocol_confirms_announcement(text,expected):
         raise ProtocolFormatError('Протокол не подтвердил номер объявления.')
     russian=re.search(r'Протокол\s+об\s+итогах',text,re.I)
     if russian: text=text[russian.start():]

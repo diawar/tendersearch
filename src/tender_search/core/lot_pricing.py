@@ -9,6 +9,27 @@ CONFIRMED_METHODS = {11, 12, 23, 35, 36, 41}
 CENT = Decimal('0.01')
 
 
+def budget_unit_price(lot):
+    """Use only a verified single-position quantity already saved with this lot.
+
+    No per-row requests or database lookups while rendering result tables.
+    """
+    detail=(lot.raw or {}).get('_pricing_detail')
+    if not isinstance(detail,dict) or detail.get('id')!=lot.source_id or detail.get('is_combined') is not False:
+        return None
+    plans=detail.get('plan_items')
+    if not isinstance(plans,list) or len(plans)!=1 or not isinstance(plans[0],dict):return None
+    try:
+        quantity=Decimal(str(plans[0].get('count')))
+        amount=Decimal(str(lot.amount))
+        if not quantity.is_finite() or not amount.is_finite() or not 0<quantity<=Decimal('1000000000000') or quantity.as_tuple().exponent < -6 or amount<0:return None
+        with localcontext() as ctx:
+            ctx.prec=50
+            return (amount/quantity).quantize(CENT,rounding=ROUND_HALF_UP)
+    except (InvalidOperation,TypeError,ValueError):
+        return None
+
+
 def pricing_detail_snapshot(detail):
     result = {key: detail.get(key) for key in ('id', 'system', 'is_combined')}
     plans = detail.get('plan_items')
@@ -140,4 +161,7 @@ def pricing_context(owner, lot, form=None):
         for field in form.fields.values():field.disabled=True
     workflows=CollectionLot.objects.filter(profile__owner=owner,lot=lot)
     can_cancel=locked and workflows.filter(stage='applied').exists() and not workflows.filter(stage__in=['won','lost','contract','delivery','payment']).exists()
+    if can_cancel:
+        from .models import ApplicationPreparation
+        can_cancel=not ApplicationPreparation.objects.filter(owner=owner,lot=lot,portal_state__in=('submitted','completed')).exists()
     return {'price_policy':entry,'price_form':form,'price_result':result,'price_locked':locked,'saved_price':saved,'price_can_cancel':can_cancel}

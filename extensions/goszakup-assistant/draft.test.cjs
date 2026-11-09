@@ -1,0 +1,94 @@
+const assert=require('node:assert/strict');
+const fs=require('node:fs'),vm=require('node:vm');
+const {validateDraftPacket,runDraftStep}=require('./draft.js');
+const packet={schema:'goszakup-preparation-v1',company_bin:'241040001415',announcement_external_id:'17920228',
+ announcement_number:'17920228-1',lot_number:'88537093-ЗЦП1',purchase_method_id:12,single_position:true,
+ data:{product_name:'ТЕСТ комплект',manufacturer:'ТЕСТ изготовитель',country:'Китай',legal_address:'Тестовая 1',bank_account:'KZ000000000000000000',contact_phone:'+77000000000'}};
+validateDraftPacket(packet);
+assert.throws(()=>validateDraftPacket({...packet,position_count:2}));
+validateDraftPacket({...packet,position_count:2,repeat_product:true});
+for(const bad of [{purchase_method_id:11},{single_position:false},{announcement_external_id:'99'},
+ {company_bin:'invalid'},{data:{...packet.data,manufacturer:''}},{data:{...packet.data,bank_account:'bad'}}])assert.throws(()=>validateDraftPacket({...packet,...bad}));
+function worker(step,local={}){
+ let listener,data={},calls=[],opened=[],updates=[],navigationListener;
+ const chrome={runtime:{id:'test-extension',getURL:p=>'chrome-extension://test-extension/'+p,onMessage:{addListener:fn=>listener=fn}},
+ storage:{local:{get:async()=>structuredClone(local),set:async x=>Object.assign(local,structuredClone(x)),remove:async k=>{delete local[k];}},session:{get:async()=>structuredClone(data),set:async x=>{data=structuredClone({...data,...x});},remove:async k=>{delete data[k];}}},
+ tabs:{query:async()=>[{id:7,url:'https://zakup.gov.kz/cabinet/announcement/17920228'}],create:async options=>{opened.push(options);return {id:99};},
+ onUpdated:{addListener:fn=>navigationListener=fn,removeListener:fn=>{if(navigationListener===fn)navigationListener=null;}},
+ update:async(id,options)=>{updates.push({id,...options});setTimeout(()=>navigationListener?.(id,{status:'complete'}),0);}},
+ scripting:{executeScript:async({args})=>{calls.push(args[1]);return [{result:await step(args[1])}];}}};
+ const context={chrome,validateDraftPacket,runDraftStep,URL,Date,setTimeout,clearTimeout,GOSZAKUP_APP_ORIGINS:['http://localhost:8000'],importScripts(){}};
+ vm.createContext(context);vm.runInContext(fs.readFileSync(__dirname+'/background.js','utf8'),context);
+ const sender={id:chrome.runtime.id,url:chrome.runtime.getURL('popup.html')};
+ return {calls,opened,updates,get job(){return data.draftJob;},send:(message,from=sender)=>new Promise(resolve=>{if(listener(message,from,resolve)===false)resolve({ignored:true});}),
+  untrusted:()=>listener({type:'draft:start'},{id:'other',url:'https://zakup.gov.kz/'},()=>{throw Error('Unauthorized response');})};
+}
+const settle=()=>new Promise(resolve=>setTimeout(resolve,15));
+(async()=>{
+ let stage=0;
+ const happy=worker(async action=>{
+  if(action==='probe')return stage===0?{next:'save_account'}:{state:'complete',number:'123',lotConfirmed:true,message:'ready'};
+  stage++;return {state:'draft_created',number:'123',lotConfirmed:true};
+ });
+ assert.equal(happy.untrusted(),false);
+ await happy.send({type:'draft:load',packet});await happy.send({type:'draft:start'});await settle();
+ assert.equal(happy.job.status,'complete');assert.equal(happy.job.number,'123');assert.equal(happy.job.lotConfirmed,true);
+ let navigated=false;
+ const resume=worker(async action=>action==='probe'?(navigated?{state:'complete',number:'123',lotConfirmed:true}:{next:'open_form'}):
+  (navigated=true,{state:'navigate',number:'123',navigate:'https://zakup.gov.kz/cabinet/purchase/announcements/17920228/apply?step=3&id=123'}));
+ await resume.send({type:'draft:load',packet});await resume.send({type:'draft:start'});await settle();
+ assert.equal(resume.job.status,'complete');assert.equal(resume.updates.length,1);assert.equal(resume.updates[0].id,7);assert.equal(resume.opened.length,0);
+ const unsafe=worker(async action=>action==='probe'?{next:'open_form'}:{navigate:'https://evil.example/',number:'123'});
+ await unsafe.send({type:'draft:load',packet});await unsafe.send({type:'draft:start'});await settle();
+ assert.equal(unsafe.job.status,'blocked');assert.equal(unsafe.updates.length,0);
+ let mutationCalls=0;
+ const uncertain=worker(async action=>{if(action==='probe')return {next:'save_account'};mutationCalls++;throw Error('Navigation lost');});
+ await uncertain.send({type:'draft:load',packet});await uncertain.send({type:'draft:start'});await settle();
+ assert.equal(uncertain.job.createUncertain,true);assert.equal(mutationCalls,1);
+ await uncertain.send({type:'draft:start'});await settle();assert.equal(mutationCalls,1);assert.equal(uncertain.job.status,'blocked');
+ const denied=await uncertain.send({type:'draft:load',packet});assert.match(denied.error,/неподтвержд/);
+ const preflight=worker(async action=>action==='probe'?{next:'save_account'}:{blocked:true,uncertain:false,message:'Required choice missing'});
+ await preflight.send({type:'draft:load',packet});await preflight.send({type:'draft:start'});await settle();
+ assert.equal(preflight.job.createUncertain,false); // No click: a corrected form can be retried.
+ const bad=await happy.send({type:'draft:load',packet:{...packet,purchase_method_id:99}});assert.ok(bad.error);
+ const appSender={id:'test-extension',url:'http://localhost:8000/lots/27723/preparation/',frameId:0,tab:{id:11}};
+ const bridge=worker(()=>{throw Error('Handoff must never inject into the portal');});
+ const prepared=await bridge.send({type:'bridge:prepare',packet},appSender);
+ assert.equal(prepared.prepared,true);assert.equal(prepared.opened,true);
+ assert.equal(bridge.calls.length,0);assert.equal(bridge.job.status,'ready');
+ assert.equal(bridge.job.appOrigin,'http://localhost:8000');
+ assert.equal(bridge.opened[0].url,'https://zakup.gov.kz/cabinet/announcement/17920228');
+ for(const from of [{...appSender,url:'https://evil.example/lots/27723/preparation/'},
+  {...appSender,url:'http://localhost:8001/lots/27723/preparation/'},
+  {...appSender,url:'http://localhost:8000/settings/'},{...appSender,frameId:1},{...appSender,id:'other'}]){
+  assert.equal((await bridge.send({type:'bridge:prepare',packet},from)).ignored,true);
+ }
+ assert.equal(bridge.opened.length,1);
+ const refused=await uncertain.send({type:'bridge:prepare',packet},appSender);assert.match(refused.error,/неподтвержд/);assert.equal(uncertain.opened.length,0);
+ const resumed=await happy.send({type:'bridge:prepare',packet},appSender);assert.equal(resumed.prepared,true);assert.equal(happy.job.number,'123');
+ const queueSender={...appSender,url:'http://localhost:8000/workspace/drafts/'};
+ const contextQueue={id:12,generation:'11111111-1111-4111-8111-111111111111'};
+ const queued=await happy.send({type:'bridge:prepare',packet,queue_context:contextQueue},queueSender);
+ assert.equal(queued.prepared,true);
+ const summary=await happy.send({type:'bridge:queue-status'},queueSender);
+ assert.equal(summary.queue_context.id,12);assert.equal(summary.snapshot.number,'123');
+ assert.equal(summary.snapshot.status,'ready');assert.equal(summary.snapshot.description_saved,false);
+ assert.equal(summary.snapshot.data,undefined);assert.equal(summary.snapshot.packet,undefined);
+ assert.equal((await happy.send({type:'bridge:queue-status'},appSender)).ignored,true);
+ const invalid=await happy.send({type:'bridge:prepare',packet,queue_context:{id:-1,generation:'bad'}},queueSender);
+ assert.ok(invalid.error);
+ const disk={};
+ const before=worker(async action=>{if(action==='probe')return {next:'save_account'};throw Error('Browser crashed');},disk);
+ await before.send({type:'draft:load',packet});await before.send({type:'draft:start'});await settle();
+ const after=worker(async()=>({next:'save_account'}),disk);
+ await after.send({type:'draft:load',packet});await after.send({type:'draft:start'});await settle();
+ assert.deepEqual(after.calls,['probe']);assert.equal(after.job.status,'blocked');
+ const known=worker(async()=>({next:'save_account'}));
+ await known.send({type:'draft:load',packet:{...packet,existing_application_number:'73771733'}});
+ await known.send({type:'draft:start'});await settle();
+ assert.deepEqual(known.calls,['probe']);assert.equal(known.job.number,'73771733');
+ assert.equal(JSON.stringify(disk).includes('bank_account'),false);
+ console.log('Draft packet validation, sender restriction, confirmed completion and duplicate creation guard passed');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+
+module.exports={packet};

@@ -7,10 +7,19 @@ protocol, BIN, OTHER = fixtures.protocol, fixtures.BIN, fixtures.OTHER
 from .models import UserLotWorkflow, LotOutcomeWatch
 from .workflow_state import update_workflow
 from .outcome_service import enroll_participation_checks, check_outcome
-from .outcome_source import Outcome, parse_lot_result
+from .outcome_source import Outcome, parse_lot_result, ProtocolFormatError
 
 
 class CompletenessTests(SimpleTestCase):
+    def test_zcp_protocol_heading_binds_exact_announcement_base_and_revision(self):
+        text=protocol(BIN).replace('Протокол об итогах 100-1','Протокол об итогах 100-ЗЦП1\n№ закупки 100-ЗЦП1')
+        self.assertEqual(parse_lot_result(text,'100-1','101-ЗЦП1',BIN).state,'won')
+        for wrong in ['100-2','10-1','1000-1']:
+            with self.assertRaises(ProtocolFormatError):parse_lot_result(text,wrong,'101-ЗЦП1',BIN)
+        other=protocol(BIN).replace('Протокол об итогах 100-1','Протокол об итогах 100-ОК1')
+        with self.assertRaises(ProtocolFormatError):parse_lot_result(other,'100-1','101-ЗЦП1',BIN)
+        with self.assertRaises(ProtocolFormatError):parse_lot_result(text,'100-1','999-ЗЦП1',BIN)
+
     def test_absence_requires_explicit_matching_count(self):
         text=protocol(OTHER)
         self.assertFalse(parse_lot_result(text,'100-1','101-ЗЦП1','111111111111').participants_complete)

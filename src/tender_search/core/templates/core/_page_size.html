@@ -1,0 +1,4 @@
+{% if per_page %}<div class="page-size-controls"><span>Всего лотов: {{ page.paginator.count }}</span><form method="get" action="{{ request.path }}{% if job %}#search-results{% endif %}"{% if job %} hx-get="{{ request.path }}" hx-target="#search-results" hx-swap="outerHTML" hx-push-url="true"{% endif %}>
+{% for key,value in page_query_items %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
+<label>На странице <select name="per_page" data-page-size aria-label="Лотов на странице">{% for value in page_size_options %}<option value="{{ value }}"{% if per_page == value %} selected{% endif %}>{{ value }}</option>{% endfor %}</select></label><noscript><button class="outline" type="submit">Применить</button></noscript>
+</form></div>{% endif %}

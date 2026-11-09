@@ -4,10 +4,11 @@ from django import forms
 from django.utils import timezone
 from .models import ReferenceEntry
 from .procurement_groups import grouped_choices
+from .company_choices import TAXPAYER_TYPES
 
 
-def split_terms(value):
-    terms = list(dict.fromkeys(t.strip() for t in re.split(r"[\s;,]+", value or "") if t.strip()))
+def split_terms(value, phrase=False):
+    terms = list(dict.fromkeys(' '.join(t.split()) for t in re.split(r"[\n\r\t;,]+" if phrase else r"[\s;,]+", value or "") if t.strip()))
     if any(len(t) > 150 for t in terms):
         raise forms.ValidationError("Тег не должен быть длиннее 150 символов.")
     return terms
@@ -18,8 +19,7 @@ class SearchForm(forms.Form):
                             widget=forms.Textarea(attrs={"rows": 2, "placeholder": "телефон\nсмартфон"}),
                             help_text="Один тег — одно слово. Количество тегов не ограничено.")
     mode = forms.ChoiceField(label="Объединение условий", initial="any", choices=[("any", "Любое условие — ИЛИ"), ("all", "Все условия — И")])
-    kind = forms.ChoiceField(label="Совпадение", choices=[("contains", "Ключевое слово")],
-                             initial="contains", disabled=True)
+    kind = forms.ChoiceField(label="Совпадение", choices=[("contains", "Ключевое слово"),("phrase","Ключевая фраза")], initial="contains")
     exclude = forms.CharField(label="Исключить слова", required=False,
                               widget=forms.Textarea(attrs={"rows": 2, "placeholder": "ремонт; монтаж"}),
                               help_text="Исключаем вхождения текста в названии и описании: услуг → услуги, ремонт → ремонта.")
@@ -42,8 +42,14 @@ class SearchForm(forms.Form):
 
 
     def __init__(self, *args, **kwargs):
+        bound=args[0] if args else kwargs.get('data')
+        if bound is not None:
+            values=bound.copy()
+            if not values.get('kind') or values.get('kind') in ('word','field'):values['kind']='contains'
+            if args:args=(values,*args[1:])
+            else:kwargs['data']=values
         super().__init__(*args, **kwargs)
-        self.initial["kind"] = "contains"
+        if self.initial.get('kind') not in ('contains','phrase'):self.initial['kind']='contains'
         self.procurement_options = {}
         for field, kind in [("status", "lot-statuses"), ("method", "purchase-methods")]:
             rows = list(ReferenceEntry.objects.filter(kind=kind))
@@ -68,7 +74,7 @@ class SearchForm(forms.Form):
 
 
     def clean_terms(self):
-        terms = split_terms(self.cleaned_data["terms"])
+        terms = split_terms(self.cleaned_data["terms"],phrase=self.data.get('kind')=='phrase')
         return terms
 
     def clean_exclude(self):
@@ -121,3 +127,25 @@ class CompanySettingsForm(forms.Form):
         max_length=12, min_length=12, widget=forms.TextInput(attrs={'inputmode':'numeric','autocomplete':'off','placeholder':'12 цифр'}),
         error_messages={'invalid':'БИН должен содержать ровно 12 цифр.'},
         help_text='Используется для сравнения с победителем лота в действующем протоколе итогов.')
+    company_name = forms.CharField(label='Полное название организации',max_length=500,required=False)
+    taxpayer_type = forms.ChoiceField(label='Тип налогоплательщика на Госзакупе',choices=TAXPAYER_TYPES,required=False)
+    legal_address = forms.CharField(label='Юридический адрес',max_length=1000,required=False,widget=forms.Textarea(attrs={'rows':2}),
+        help_text='Скопируйте адрес целиком из выпадающего списка Госзакупа, включая код и обозначения портала.')
+    bank_account = forms.RegexField(label='Банковский счёт (ИИК)',regex=r'^KZ[0-9A-Z]{18}$',max_length=20,required=False,
+        error_messages={'invalid':'Укажите ИИК: KZ и ещё 18 букв или цифр.'})
+    bank_name = forms.CharField(label='Название банка',max_length=200,required=False)
+    bank_bic = forms.RegexField(label='БИК банка',regex=r'^[A-Z0-9]{8}(?:[A-Z0-9]{3})?$',max_length=11,required=False,
+        error_messages={'invalid':'БИК должен содержать 8 или 11 латинских букв или цифр.'})
+    contact_phone = forms.RegexField(label='Контактный телефон для заявки',regex=r'^\+?[0-9 ()-]{10,25}$',max_length=25,required=False,
+        widget=forms.TextInput(attrs={'type':'tel','placeholder':'+7 (___) ___-__-__'}),
+        error_messages={'invalid':'Укажите телефон: цифры, пробелы, скобки, дефис и необязательный + в начале.'})
+
+    def __init__(self,*args,**kwargs):
+        bound=args[0] if args else kwargs.get('data')
+        if bound is not None:
+            values=bound.copy()
+            for key in ('bank_account','bank_bic'):
+                if key in values:values[key]=values[key].strip().replace(' ','').upper()
+            if args:args=(values,*args[1:])
+            else:kwargs['data']=values
+        super().__init__(*args,**kwargs)

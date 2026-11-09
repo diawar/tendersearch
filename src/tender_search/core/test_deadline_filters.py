@@ -73,11 +73,11 @@ class DeadlineFilterTests(TestCase):
             self.add_hit(identifier, self.now+timedelta(hours=4))
         response = self.fetch('1')
         self.assertEqual(response.context['page'].paginator.count, 28)
-        self.assertContains(response, '?page=2&amp;remaining=1#search-results')
-        self.assertContains(response, '?view=cards&amp;remaining=1#search-results')
+        self.assertContains(response, '?per_page=20&amp;page=2&amp;remaining=1#search-results')
+        self.assertContains(response, '?per_page=20&amp;view=cards&amp;remaining=1#search-results')
         with patch('tender_search.core.views.timezone.now', return_value=self.now):
             response = self.client.get(self.url, {'remaining': '1', 'page': '2', 'view': 'cards'})
-        self.assertEqual(len(response.context['page']), 3)
+        self.assertEqual(len(response.context['page']), 8)
         self.assertContains(response, 'results-grid')
         self.assertEqual(response.context['remaining_days'], '1')
 
