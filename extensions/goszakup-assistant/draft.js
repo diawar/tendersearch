@@ -5,7 +5,6 @@ function validateDraftPacket(packet){
  if(String(packet.purchase_method_id)!=='12')throw Error('Автоматическая подготовка пока поддерживает только ЗЦП. Скачайте свежий JSON из приложения.');
  const count=packet.position_count||(packet.single_position===true?1:0);
  if(!Number.isInteger(count)||count<1||count>20)throw Error('Число позиций не подтверждено. Обновите лот и скачайте свежий JSON.');
- if(count>1&&packet.repeat_product!==true)throw Error('В лоте несколько позиций. Подтвердите одинаковый товар для всех позиций либо заполните описание вручную.');
  if(!packet.data||typeof packet.data!=='object')throw Error('Нет данных товара и организации.');
  for(const key of ['product_name','manufacturer','country','legal_address','bank_account','contact_phone'])if(typeof packet.data[key]!=='string'||!packet.data[key].trim()||packet.data[key].length>1000)throw Error('Заполните подготовку товара и реквизиты в приложении.');
  if(packet.data.taxpayer_type!==undefined&&(typeof packet.data.taxpayer_type!=='string'||packet.data.taxpayer_type.length>200))throw Error('Некорректный тип налогоплательщика.');
@@ -64,7 +63,25 @@ async function runDraftStep(packet,action='probe',context={}){
    if((combo&&!selected(root))||(plain&&!plain.value.trim()))fail('Выберите или заполните «'+text(root.querySelector('label')).trim()+'» вручную, затем продолжите в расширении.');
   }
  };
- const accountMatches=(value,kind)=>kind==='bank'?compact(value).toUpperCase().includes(packet.data.bank_account):compact(value)===compact(packet.data.legal_address);
+ const matchAddress=(value)=>{
+  const parts=packet.data.address_parts;
+  if(!parts)return compact(value)===compact(packet.data.legal_address);
+  if(!['city','street','house'].every(key=>typeof parts[key]==='string'&&parts[key].trim()))return false;
+  const words=value=>norm(value).replace(/[^\p{L}\d/-]+/gu,' ').trim();
+  const contains=(whole,part)=>(' '+words(whole)+' ').includes(' '+words(part)+' ');
+  const city=parts.city.replace(/^(?:город|г[.]?)\s*/iu,'');
+  const street=parts.street.replace(/^(?:улица|ул[.]?)\s*/iu,'');
+  if(!contains(value,city)||!contains(value,street))return false;
+  // Portal addresses end with separate comma-delimited building and room fields.
+  // Do not confuse house 7 with 17, or office 25 with 25Б.
+  const tokens=String(value).split(',').map(part=>norm(part).replace(/^(?:дом|д\.|офис|оф\.|помещение|пом\.|н\.\s*п\.)\s*/iu,'').replace(/\s+/g,'').replace(/[.]$/,''));
+  const unit=value=>norm(value).replace(/\s+/g,'');
+  const house=unit(parts.house),office=unit(parts.office||'');
+  const index=tokens.findIndex(part=>unit(part)===house);
+  if(index<0)return false;
+  return !office||tokens.slice(index+1).some(part=>unit(part)===office);
+ };
+ const accountMatches=(value,kind)=>kind==='bank'?compact(value).toUpperCase().includes(packet.data.bank_account):matchAddress(value);
  const choose=async(root,expected,predicate,{search=true}={})=>{
   if(predicate(selected(root)))return;
   if(selected(root))fail('В списке уже выбрано другое значение. Проверьте его вручную.');
@@ -103,13 +120,16 @@ async function runDraftStep(packet,action='probe',context={}){
   click(matches[0]);await wait(()=>matches[0].getAttribute('aria-selected')==='true','Вкладка не переключилась.');
   await new Promise(resolve=>setTimeout(resolve,250));
  };
+ const transient=()=>[...document.querySelectorAll('.ant-alert-error,.ant-notification-notice-error')].filter(visible).map(text).find(value=>/сервис.*недоступен|временно недоступ|технические работы|service unavailable|bad gateway|gateway timeout/i.test(value));
  const restrictions=()=>[...document.querySelectorAll('.ant-alert-error,.ant-notification-notice-error')].filter(visible)
   .map(text).find(value=>/необходимо состоять|недостаточно прав|подача заявки недоступна|не удалось|ошибка/i.test(value));
  try{
   const count=packet?.position_count||(packet?.single_position===true?1:0);
-  if(!packet||packet.schema!=='goszakup-preparation-v1'||!/^\d{12}$/.test(packet.company_bin)||!/^\d+$/.test(packet.announcement_external_id)||String(packet.purchase_method_id)!=='12'||!Number.isInteger(count)||count<1||count>20||(count>1&&packet.repeat_product!==true)||!packet.data)fail('Подготовка не подтверждена.');
+  if(!packet||packet.schema!=='goszakup-preparation-v1'||!/^\d{12}$/.test(packet.company_bin)||!/^\d+$/.test(packet.announcement_external_id)||String(packet.purchase_method_id)!=='12'||!Number.isInteger(count)||count<1||count>20||!packet.data)fail('Подготовка не подтверждена.');
   const url=new URL(location.href),ann=String(packet.announcement_external_id);
   if(url.origin!=='https://zakup.gov.kz'||!url.pathname.startsWith('/cabinet/'))fail('Откройте авторизованный кабинет zakup.gov.kz.');
+  const unavailable=transient()||(/^(503 Service Unavailable|502 Bad Gateway|504 Gateway Time-out)/i.test(document.body.innerText.trim())?document.body.innerText.slice(0,200):'');
+  if(unavailable)return {blocked:true,retryable:true,uncertain:false,message:unavailable};
   const organizationBins=()=>[...new Set([...document.querySelectorAll('header,[role=banner],.ant-layout-header')].filter(visible)
    .flatMap(el=>[...text(el).matchAll(/БИН\s*:?\s*(\d{12})/g)].map(m=>m[1])))];
   await wait(()=>organizationBins().length,'Не удалось прочитать БИН организации в шапке кабинета. Черновик сохранён; обработка остановлена.');
@@ -126,7 +146,13 @@ async function runDraftStep(packet,action='probe',context={}){
   const pageText=document.body.innerText;
   if(/Цену вводите в окне TumarCSP|Подписать цены|Подписать и отправить/.test(pageText))fail('Автоматизация остановлена перед ценой, подписанием и отправкой.');
   if(isAnnouncement){
-   if(!pageText.includes(packet.announcement_number))fail('Номер объявления не подтверждён на странице.');
+   try{
+    await wait(()=>document.body.innerText.includes(packet.announcement_number)||transient(),'Карточка объявления ещё не загрузилась.');
+   }catch{
+    return {blocked:true,retryable:true,uncertain:false,message:'Карточка объявления не загрузилась: номер не подтверждён. Повторим проверку без создания заявки.'};
+   }
+   if(transient())return {blocked:true,retryable:true,uncertain:false,message:transient()};
+   if(!document.body.innerText.includes(packet.announcement_number))fail('Номер объявления не подтверждён на странице.');
    const candidates=()=>({resumes:actions().filter(el=>/^продолжить заявку\s*№?\s*\d+$/.test(norm(text(el)))),
     creates:actions().filter(el=>norm(text(el))==='подать заявку')});
    await wait(()=>{const c=candidates();return c.resumes.length||c.creates.length;},'Кнопка «Подать заявку» / «Продолжить заявку» не найдена после загрузки. Откройте её вручную и продолжите на шаге реквизитов.');
@@ -155,6 +181,7 @@ async function runDraftStep(packet,action='probe',context={}){
   }
   const step=Number(url.searchParams.get('step')||'1');
   if(!Number.isInteger(step)||step<1||step>3)fail('Расширение работает только с реквизитами, лотом и описанием товара.');
+  const temporary=transient();if(temporary)return {blocked:true,retryable:true,uncertain:false,message:temporary.slice(0,350)};
   const restriction=restrictions();if(restriction)fail(restriction.slice(0,350));
   const fillPath=new RegExp('^'+apply+'/product-description/\\d+/?$');
   if(fillPath.test(url.pathname)){
@@ -167,13 +194,11 @@ async function runDraftStep(packet,action='probe',context={}){
    const summaries=[...document.querySelectorAll('dl')].filter(visible);
    const formLots=lotTokens(summaries.length?summaries.map(text).join(' '):document.body.innerText);
    const exactFormLot=formLots.length===1&&formLots[0]===packet.lot_number;
-   if(summaries.length&&!exactFormLot)fail('Номер лота в сведениях формы не совпадает с подготовкой.');
-   // Registry plan entries and editable application points are different objects.
-   // A single complete group for this exact lot is safe under the user's existing
-   // consent to use the same product; extra or incomplete groups still stop.
-   const singlePortalGroup=actualCount===1&&count>1&&packet.repeat_product===true&&exactFormLot;
-   if(actualCount!==count&&!singlePortalGroup)fail('В подготовке '+count+' записей плана, в форме '+actualCount+' позиций. Проверьте состав вручную.');
-   const positionNote=singlePortalGroup?' В форме Госзакупа одна позиция; в реестре '+count+' записей плана.':'';
+   if(!exactFormLot)fail('Номер лота в сведениях формы не совпадает с подготовкой.');
+   // Registry rows can be repeated versions, not separate product forms.
+   // Never spread a single product preparation over multiple editable groups.
+   if(actualCount!==1)fail('В форме несколько описаний товара. Заполните их вручную: подготовка содержит описание только одного товара.');
+   const positionNote='';
    const entries=names.map((root,i)=>({name:root.querySelector('input'),manufacturer:manufacturers[i].querySelector('input'),country:countries[i]}));
    const ready=entries.every(({name,manufacturer,country})=>name?.value.trim()===packet.data.product_name.trim()&&manufacturer?.value.trim()===packet.data.manufacturer.trim()&&norm(selected(country))===norm(packet.data.country));
    if(action==='probe')return result('description',ready?'save_description':'fill_description','Описание товара.'+positionNote,{lotConfirmed:true});
@@ -284,7 +309,7 @@ async function runDraftStep(packet,action='probe',context={}){
    return result('description_opened',null,'Открыто описание товара.');
   }
   fail('Шаг не поддерживается.');
- }catch(error){return {blocked:true,uncertain:mutationStarted,message:error.message||'Не удалось проверить форму. Действия остановлены.'};}
+ }catch(error){const temporary=transient();return {blocked:true,retryable:Boolean(temporary),uncertain:mutationStarted,message:temporary||error.message||'Не удалось проверить форму. Действия остановлены.'};}
 }
 
 if(typeof module!=='undefined')module.exports={validateDraftPacket,runDraftStep};

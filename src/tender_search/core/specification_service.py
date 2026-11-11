@@ -74,11 +74,10 @@ def process_specification(job_id, generation):
             with TemporaryDirectory(dir=work) as temporary:
                 for file in files[:8]:
                     try:
-                        doc=Document.objects.filter(announcement=job.lot.announcement,source_id=file.id,url=file.url).first()
-                        version=doc.versions.order_by('-pk').first() if doc else None
-                        path=stored_path(version.storage_path) if version else None
-                        if path is None or not path.is_file():path=Path(api.download(file,Path(temporary),max_bytes=20*1024*1024)['path'])
-                        text,truncated=extract_text(path,file.name)
+                        from .technical_documents import cache_file
+                        version=cache_file(job.lot,file,api)
+                        text=version.text
+                        truncated=bool(version.pages and version.pages[0].get('truncated'))
                         documents.append({'name':file.name,'text':text,'source_url':file.url,'scope':'lot' if file.lot_id else 'announcement','truncated':truncated})
                     except Exception as exc:
                         errors.append(str(exc)[:200] if isinstance(exc,SourceError) else 'Не удалось извлечь текст одного из документов.')

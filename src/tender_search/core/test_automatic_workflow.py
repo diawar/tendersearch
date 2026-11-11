@@ -68,7 +68,7 @@ class AutomaticWorkflowTests(TestCase):
         self.assertTrue(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
         self.assertFalse(Favorite.objects.filter(owner=self.other,lot=self.lot).exists())
         self.assertTrue(AnnouncementWatch.objects.filter(owner=self.owner,enabled=True).exists())
-        documents.assert_called_once_with(self.lot.pk)
+        documents.assert_not_called()
         self.client.post(f'/workspace/items/{self.item.pk}/stage/',{'stage':'interesting'})
         self.assertEqual(Favorite.objects.filter(owner=self.owner,lot=self.lot).count(),1)
 
@@ -129,10 +129,26 @@ class AutomaticWorkflowTests(TestCase):
         self.assertEqual(watch.lease,'')
         self.assertEqual(delivery.state,'cancelled')
         self.assertTrue(foreign.enabled)
-        self.assertEqual(StatusDelivery.objects.filter(watch=watch,event_key__endswith=':stop').count(),1)
+        self.assertEqual(StatusDelivery.objects.filter(watch=watch,event_key__endswith=':stop').count(),0)
         state=self.client.get('/lots/ui-state/',{'ids':self.lot.pk}).json()['lots'][0]
         self.assertFalse(state['watched'])
         self.assertFalse(state['favorite'])
+
+    def legacy_applied(self):
+        """Construct a pre-migration manual mark for backward compatibility tests."""
+        from .workflow_state import update_workflow
+        update_workflow(self.owner.pk,self.lot.pk,stage='applied',result_tracking=True)
+        UserLotPrice.objects.update_or_create(owner=self.owner,lot=self.lot,
+            defaults={'unit_gross':116,'vat_rate':16,'locked_at':timezone.now()})
+        return register_watch(self.owner.pk,self.lot.pk)
+
+    def submitted_report(self):
+        from .models import ApplicationPreparation
+        from .preparation import save_portal_report
+        ApplicationPreparation.objects.get_or_create(owner=self.owner,lot=self.lot,defaults={'company_bin':BIN})
+        return save_portal_report(self.owner,self.lot.pk,{'schema':'goszakup-status-v1','state':'submitted',
+            'company_bin':BIN,'announcement_number':self.lot.announcement.number,'lot_number':self.lot.number,
+            'number':'12345','url':'https://zakup.gov.kz/cabinet/purchase/my-applications/12345','observed_at':timezone.now().isoformat()})
 
     def apply(self):
         self.item.stage='applied';self.item.result_tracking=True;self.item.save()
@@ -144,36 +160,36 @@ class AutomaticWorkflowTests(TestCase):
             portal.return_value.outcome.return_value=result
             check_outcome(watch.pk,'lease')
         return LotOutcomeWatch.objects.get(pk=watch.pk)
-    def test_price_first_available_only_in_interesting_then_fixed_and_applied(self):
-        page=self.client.get(f'/lots/{self.lot.pk}/')
-        self.assertContains(page,'class="lot-price-form"')
-        self.assertContains(page,'>Подать цену</button>')
-        self.assertNotContains(page,'>Сохранить цену</button>')
-        for value in ('', '0', '-2', 'NaN'):
-            self.assertEqual(self.client.post(f'/lots/{self.lot.pk}/price/',{'unit_gross':value,'vat_rate':'16'}).status_code,400)
-            self.item.refresh_from_db();self.assertEqual(self.item.stage,'interesting')
-            self.assertFalse(UserLotPrice.objects.exists());self.assertFalse(LotOutcomeWatch.objects.exists())
-        result=self.client.post(f'/lots/{self.lot.pk}/price/',{'unit_gross':'116','vat_rate':'16'})
-        self.assertEqual(result.status_code,302)
-        self.item.refresh_from_db();self.assertEqual(self.item.stage,'applied');self.assertTrue(self.item.result_tracking)
-        saved=UserLotPrice.objects.get(owner=self.owner,lot=self.lot);self.assertTrue(saved.locked_at)
-        self.assertTrue(LotOutcomeWatch.objects.filter(owner=self.owner,lot=self.lot,company_bin=BIN).exists())
-        for gross in ('232',''):
-            self.assertEqual(self.client.post(f'/lots/{self.lot.pk}/price/',{'unit_gross':gross,'vat_rate':'16'}).status_code,403)
-        saved.refresh_from_db();self.assertEqual(saved.unit_gross,116)
-        self.item.stage='new';self.item.save()
-        UserLotPrice.objects.all().delete()
+    def test_price_in_preparation_does_not_submit_until_portal_confirms(self):
+        from .workflow_state import update_workflow
         self.assertNotContains(self.client.get(f'/lots/{self.lot.pk}/'),'class="lot-price-form"')
-    def test_uncertain_source_allows_our_gross_price_but_not_claimed_submission_net(self):
-        self.lot.announcement.raw={'system':{'id':4}};self.lot.announcement.save()
-        page=self.client.get(f'/lots/{self.lot.pk}/')
-        self.assertContains(page,'class="lot-price-form"')
+        self.assertEqual(self.client.post(f'/lots/{self.lot.pk}/price/',{'unit_gross':'116'}).status_code,403)
+        update_workflow(self.owner.pk,self.lot.pk,stage='preparing')
+        self.assertContains(self.client.get(f'/lots/{self.lot.pk}/preparation/'),'Сохранить подготовку')
+        for value in ('', '0', '-2', 'NaN'):
+            self.assertEqual(self.client.post(f'/lots/{self.lot.pk}/price/',{'unit_gross':value}).status_code,400)
+            self.assertFalse(UserLotPrice.objects.exists());self.assertFalse(LotOutcomeWatch.objects.exists())
+        self.assertEqual(self.client.post(f'/lots/{self.lot.pk}/price/',{'unit_gross':'116','confirm_discount':'on'}).status_code,302)
+        self.item.refresh_from_db();self.assertEqual(self.item.stage,'preparing')
+        saved=UserLotPrice.objects.get(owner=self.owner,lot=self.lot);self.assertIsNone(saved.locked_at)
+        self.assertFalse(LotOutcomeWatch.objects.exists())
+        self.submitted_report()
+        self.item.refresh_from_db();saved.refresh_from_db()
+        self.assertEqual(self.item.stage,'applied');self.assertTrue(saved.locked_at)
+        self.assertTrue(LotOutcomeWatch.objects.filter(owner=self.owner,lot=self.lot,company_bin=BIN).exists())
+        self.assertEqual(self.client.post(f'/lots/{self.lot.pk}/price/',{'unit_gross':'232'}).status_code,403)
+
+    def test_uncertain_budget_cannot_save_price_or_claim_submission(self):
+        from .workflow_state import update_workflow
+        update_workflow(self.owner.pk,self.lot.pk,stage='preparing')
+        self.lot.announcement.raw={'system':{'id':2}};self.lot.announcement.save()
+        page=self.client.get(f'/lots/{self.lot.pk}/preparation/')
         self.assertFalse(page.context['price_policy']['confirmed'])
-        self.assertContains(page,'data-price-output="unit_net"')
-        self.assertNotContains(page,'За единицу без НДС · для подачи')
-        self.assertNotContains(page,'<select name="vat_rate"')
-        self.assertContains(page,'type="hidden" name="vat_rate"')
-        self.assertEqual(self.client.post(f'/lots/{self.lot.pk}/price/',{'unit_gross':'116','vat_rate':'16'}).status_code,302)
+        self.assertContains(page,'Бюджет без НДС или количество не подтверждены')
+        self.assertNotContains(page,'без НДС · для подачи')
+        self.assertEqual(self.client.post(f'/lots/{self.lot.pk}/price/',{'unit_gross':'116','confirm_discount':'on'}).status_code,400)
+        self.assertFalse(UserLotPrice.objects.exists());self.assertFalse(LotOutcomeWatch.objects.exists())
+
     def test_winner_moves_only_tracked_own_lot_and_notifies_once(self):
         other_profile=SearchProfile.objects.create(owner=self.other,name='Чужая')
         other_item=CollectionLot.objects.create(profile=other_profile,lot=self.lot,stage='applied',result_tracking=True)
@@ -228,17 +244,24 @@ class AutomaticWorkflowTests(TestCase):
         self.apply();self.lot.announcement.deadline=timezone.now()-timedelta(hours=1);self.lot.announcement.save()
         move_closed_unsubmitted();self.item.refresh_from_db();self.assertEqual(self.item.stage,'applied')
 
-    def test_watch_failure_rolls_back_price_and_stage_together(self):
+    def test_watch_failure_rolls_back_confirmed_submission_and_price_lock(self):
+        from .workflow_state import update_workflow
+        from .models import ApplicationPreparation
+        update_workflow(self.owner.pk,self.lot.pk,stage='preparing')
+        UserLotPrice.objects.create(owner=self.owner,lot=self.lot,unit_gross=116,vat_rate=16)
+        ApplicationPreparation.objects.create(owner=self.owner,lot=self.lot,company_bin=BIN)
         with patch('tender_search.core.outcome_service.register_watch',side_effect=RuntimeError('queue unavailable')):
-            with self.assertRaises(RuntimeError):
-                self.client.post(f'/lots/{self.lot.pk}/price/',{'unit_gross':'116','vat_rate':'16'})
-        self.item.refresh_from_db();self.assertEqual(self.item.stage,'interesting')
-        self.assertFalse(UserLotPrice.objects.exists());self.assertFalse(LotOutcomeWatch.objects.exists())
+            with self.assertRaises(RuntimeError):self.submitted_report()
+        self.item.refresh_from_db();self.assertEqual(self.item.stage,'preparing')
+        self.assertIsNone(UserLotPrice.objects.get(owner=self.owner,lot=self.lot).locked_at)
+        self.assertEqual(ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot).portal_state,'unconfirmed')
+        self.assertFalse(LotOutcomeWatch.objects.exists())
 
+    @override_settings(TELEGRAM_BOT_TOKEN='test-only')
     def test_result_delivery_anytime_private_and_once(self):
         from .models import TelegramSubscription
-        watch=self.run_check(Outcome('won',BIN,'Наша'))
         TelegramSubscription.objects.create(owner=self.owner,chat_id=9001,enabled=True)
+        watch=self.run_check(Outcome('won',BIN,'Наша'))
         TelegramSubscription.objects.create(owner=self.other,chat_id=9002,enabled=True)
         with patch('tender_search.core.telegram_service.in_work_hours',return_value=False),patch('tender_search.core.outcome_service.telegram_api',return_value={'message_id':123}) as send:
             deliver_outcomes();deliver_outcomes()
@@ -280,58 +303,19 @@ class AutomaticWorkflowTests(TestCase):
         self.item.stage='new';self.item.save()
         Favorite.objects.get_or_create(owner=self.owner,lot=self.lot)[0]
         self.item.refresh_from_db();self.assertEqual(self.item.stage,'interesting')
-        self.client.post(f'/lots/{self.lot.pk}/price/',{'unit_gross':'116','vat_rate':'16'})
+        self.submitted_report()
         Favorite.objects.filter(owner=self.owner,lot=self.lot).delete()
         Favorite.objects.get_or_create(owner=self.owner,lot=self.lot)[0]
         self.item.refresh_from_db();self.assertEqual(self.item.stage,'applied')
 
-    def test_cancel_mark_unlocks_price_stops_watch_and_can_submit_again(self):
-        self.client.post(f'/lots/{self.lot.pk}/price/',{'unit_gross':'116'})
+    def test_removed_cancel_endpoint_cannot_change_price_stage_or_watch(self):
+        self.legacy_applied()
         watch=LotOutcomeWatch.objects.get(owner=self.owner,lot=self.lot)
-        previous=watch.generation
-        OutcomeDelivery.objects.create(watch=watch,generation=previous,revision=1,event_key='pending-cancel',payload={})
-        page=self.client.get(f'/lots/{self.lot.pk}/')
-        self.assertContains(page,'disabled>Подали заявку</button>')
-        self.assertContains(page,'Отменить отметку')
-        self.assertContains(page,'https://goszakup.gov.kz/')
-        with patch('tender_search.core.outcome_service.OutcomePortal') as portal:
-            self.assertEqual(self.client.post(f'/lots/{self.lot.pk}/application/cancel/').status_code,302)
-            portal.assert_not_called()
-        self.item.refresh_from_db();watch.refresh_from_db()
-        price=UserLotPrice.objects.get(owner=self.owner,lot=self.lot)
-        self.assertEqual(self.item.stage,'interesting');self.assertFalse(self.item.result_tracking)
-        self.assertIsNone(price.locked_at);self.assertEqual(price.unit_gross,116)
-        self.assertFalse(watch.enabled);self.assertNotEqual(watch.generation,previous)
-        self.assertEqual(OutcomeDelivery.objects.get().state,'cancelled')
-        self.assertEqual(self.client.post(f'/lots/{self.lot.pk}/price/',{'unit_gross':'232','vat_rate':'0'}).status_code,302)
-        price.refresh_from_db();watch.refresh_from_db();self.item.refresh_from_db()
-        self.assertEqual((price.unit_gross,price.vat_rate),(232,16))
-        self.assertTrue(price.locked_at);self.assertTrue(watch.enabled);self.assertEqual(self.item.stage,'applied')
-
-    def test_cancel_is_private_and_forbids_reverting_confirmed_outcome(self):
-        self.client.post(f'/lots/{self.lot.pk}/price/',{'unit_gross':'116'})
+        generation=watch.generation
         endpoint=f'/lots/{self.lot.pk}/application/cancel/'
-        self.assertEqual(self.client.get(endpoint).status_code,405)
-        self.client.force_login(self.other)
-        self.assertEqual(self.client.post(endpoint).status_code,403)
-        self.item.refresh_from_db();self.assertEqual(self.item.stage,'applied')
-        self.client.force_login(self.owner)
-        self.item.stage='won';self.item.save()
-        self.assertEqual(self.client.post(endpoint).status_code,403)
-        self.item.refresh_from_db();self.assertEqual(self.item.stage,'won')
-        self.assertTrue(UserLotPrice.objects.get(owner=self.owner,lot=self.lot).locked_at)
-
-    def test_cancellation_fences_a_running_result_check(self):
-        from .outcome_service import cancel_application
-        self.client.post(f'/lots/{self.lot.pk}/price/',{'unit_gross':'116'})
-        watch=LotOutcomeWatch.objects.get(owner=self.owner,lot=self.lot)
-        LotOutcomeWatch.objects.filter(pk=watch.pk).update(lease='running')
-        def cancel_during_read(*args):
-            cancel_application(self.owner,self.lot)
-            return Outcome('won',BIN,'Наша')
-        with patch('tender_search.core.outcome_service.source_client'),patch('tender_search.core.outcome_service.OutcomePortal') as portal:
-            portal.return_value.outcome.side_effect=cancel_during_read
-            check_outcome(watch.pk,'running')
+        self.assertEqual(self.client.get(endpoint).status_code,404)
+        self.assertEqual(self.client.post(endpoint).status_code,404)
         self.item.refresh_from_db();watch.refresh_from_db()
-        self.assertEqual(self.item.stage,'interesting');self.assertFalse(watch.enabled)
-        self.assertFalse(OutcomeDelivery.objects.exists())
+        self.assertEqual(self.item.stage,'applied')
+        self.assertTrue(UserLotPrice.objects.get(owner=self.owner,lot=self.lot).locked_at)
+        self.assertTrue(watch.enabled);self.assertEqual(watch.generation,generation)

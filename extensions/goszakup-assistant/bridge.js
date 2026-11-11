@@ -2,24 +2,26 @@
 (()=>{
  const queuePage=location.pathname==='/workspace/drafts/';
  if(window.top!==window||!globalThis.GOSZAKUP_APP_ORIGINS?.includes(location.origin)||(!/^\/lots\/\d+\/preparation\/$/.test(location.pathname)&&!queuePage))return;
+ if(globalThis.GOSZAKUP_BRIDGE_ATTACHED)return;
+ globalThis.GOSZAKUP_BRIDGE_ATTACHED=true;
  const channel='goszakup-preparation-bridge-v1';
  let busy=false;
  const reply=(id,value)=>window.postMessage({channel,id,...value},location.origin);
  window.addEventListener('message',async event=>{
   const message=event.data;
   if(event.source!==window||event.origin!==location.origin||!message||message.channel!==channel||typeof message.id!=='string'||!/^[\w-]{16,80}$/.test(message.id))return;
-  if(message.type==='ping'){reply(message.id,{type:'ready',extensionId:chrome.runtime.id});return;}
-  if(message.type!=='prepare'&&!(queuePage&&message.type==='queue-status'))return;
+  if(message.type==='ping'){reply(message.id,{type:'ready',extensionId:chrome.runtime.id,autoQueue:true,queueCheck:true,queueReset:true});return;}
+  if(message.type!=='prepare'&&!(queuePage&&['queue-status','queue-stop','queue-check'].includes(message.type)))return;
   if(message.extensionId!==chrome.runtime.id)return;
   if(busy){reply(message.id,{type:'result',error:'Передача уже выполняется.'});return;}
   busy=true;
   try{
-   if(message.type==='queue-status'){
-    const result=await chrome.runtime.sendMessage({type:'bridge:queue-status'});
+   if(['queue-status','queue-stop','queue-check'].includes(message.type)){
+    const result=await chrome.runtime.sendMessage({type:'bridge:'+message.type,...(message.type==='queue-check'?{target:message.target}:{})});
     reply(message.id,{type:'result',...result});return;
    }
    if(JSON.stringify(message.packet).length>50000)throw Error('Слишком большой пакет подготовки.');
-   const result=await chrome.runtime.sendMessage({type:'bridge:prepare',packet:message.packet,...(queuePage?{queue_context:message.queue_context}:{})});
+   const result=await chrome.runtime.sendMessage({type:'bridge:prepare',packet:message.packet,...(queuePage?{queue_context:message.queue_context,auto_start:message.auto_start===true}:{})});
    if(result?.error)throw Error(result.error);
    if(!result?.prepared)throw Error('Расширение не подтвердило получение данных.');
    reply(message.id,{type:'result',prepared:true,opened:result.opened===true});

@@ -30,6 +30,12 @@ def queue_documents(lot_id):
         LotDocumentDownload.objects.filter(pk=batch.pk).update(state='error',error='Очередь недоступна. Повторите загрузку.')
 
 
+def contract_file(file):
+    import re
+    label = f"{getattr(file, 'group_name', '')} {file.name}"
+    return bool(re.search(r'договор|шарт|contract', label, re.I))
+
+
 def download_documents(lot_id, api):
     if not LotDocumentDownload.objects.filter(lot_id=lot_id,state='queued').update(state='running',updated_at=timezone.now()):
         return
@@ -40,14 +46,16 @@ def download_documents(lot_id, api):
             return
         files = api.documents(lot.announcement.source_id)
         for file in files:
-            if file.lot_id not in {None, lot.source_id}:
+            if file.lot_id not in {None, lot.source_id} or not contract_file(file):
                 continue
             if not Favorite.objects.filter(lot=lot).exists():
                 break
+            previous = Document.objects.filter(announcement=lot.announcement, source_id=file.id).first()
+            unchanged = previous is not None and previous.url == file.url
             doc, _ = Document.objects.update_or_create(announcement=lot.announcement,source_id=file.id,
-                defaults={'lot':lot if file.lot_id else None,'name':file.name,'url':file.url})
+                defaults={'lot':lot if file.lot_id else None,'name':file.name,'url':file.url,'kind':'contract'})
             cached = doc.versions.order_by('-pk').first()
-            if cached and stored_path(cached.storage_path).is_file():
+            if unchanged and cached and cached.storage_path and stored_path(cached.storage_path).is_file():
                 Document.objects.filter(pk=doc.pk).update(status='ready',error='')
                 continue
             try:
@@ -65,20 +73,39 @@ def download_documents(lot_id, api):
         cleanup_documents(lot.announcement_id)
 
 
-def cleanup_documents(announcement_id):
+def documents_needed(lot_ids, deadline, kind, now=None):
+    """A file is shared: every user's workflow participates in retention."""
     from .models import UserLotWorkflow
+    now = now or timezone.now()
+    if deadline is None or deadline > now - timedelta(days=7):
+        return True
+    for workflow in UserLotWorkflow.objects.filter(lot_id__in=lot_ids):
+        if workflow.stage not in ('lost', 'not_participated', 'archived'):
+            return True
+        days = 90 if kind in ('contract', 'act') or workflow.stage == 'archived' else 30
+        changed = workflow.completed_at or workflow.archived_at or workflow.updated_at
+        if changed > now - timedelta(days=days):
+            return True
+    return False
+
+
+def cleanup_documents(announcement_id):
     paths = []
     with transaction.atomic():
-        Announcement.objects.select_for_update().filter(pk=announcement_id).first()
-        favorites = Favorite.objects.filter(lot__announcement_id=announcement_id)
-        archived = UserLotWorkflow.objects.filter(lot__announcement_id=announcement_id,stage='archived')
+        announcement = Announcement.objects.select_for_update().filter(pk=announcement_id).first()
+        if not announcement:
+            return
         for doc in Document.objects.filter(announcement_id=announcement_id):
-            needed = favorites.filter(lot_id=doc.lot_id).exists() if doc.lot_id else favorites.exists()
-            needed = needed or (archived.filter(lot_id=doc.lot_id).exists() if doc.lot_id else archived.exists())
-            if not needed:
-                paths.extend(doc.versions.values_list('storage_path',flat=True))
-                doc.delete()
-        LotDocumentDownload.objects.filter(lot__announcement_id=announcement_id).exclude(lot_id__in=Favorite.objects.values('lot_id')).update(state='cancelled',error='')
+            lot_ids = [doc.lot_id] if doc.lot_id else list(announcement.lots.values_list('pk', flat=True))
+            if documents_needed(lot_ids, announcement.deadline, doc.kind):
+                continue
+            paths.extend(doc.versions.exclude(storage_path='').values_list('storage_path', flat=True))
+            doc.versions.update(storage_path='', text='', pages=[])
+            Document.objects.filter(pk=doc.pk).update(status='expired', error='')
+        from .models import LotSpecification
+        for lot in announcement.lots.all():
+            if not documents_needed([lot.pk], announcement.deadline, 'technical'):
+                LotSpecification.objects.filter(lot=lot).update(documents=[], state='not_found', error='Срок хранения документов истёк.')
         def remove_files():
             for value in set(paths):
                 if not DocumentVersion.objects.filter(storage_path=value).exists():
@@ -87,3 +114,19 @@ def cleanup_documents(announcement_id):
                     except (OSError, ValueError):
                         pass
         transaction.on_commit(remove_files)
+
+
+def cleanup_expired_documents():
+    from django.core.cache import cache
+    from .models import LotShipment
+    if not cache.add('document-retention-hour', True, timeout=3600):
+        return
+    ids = Document.objects.exclude(status='expired').values_list('announcement_id', flat=True).distinct()
+    for announcement_id in ids.iterator():
+        cleanup_documents(announcement_id)
+    for shipment in LotShipment.objects.exclude(act='').select_related('lot__announcement').iterator():
+        if not documents_needed([shipment.lot_id], shipment.lot.announcement.deadline, 'act'):
+            name, storage = shipment.act.name, shipment.act.storage
+            LotShipment.objects.filter(pk=shipment.pk, act=name).update(act='')
+            if not LotShipment.objects.filter(act=name).exists():
+                storage.delete(name)

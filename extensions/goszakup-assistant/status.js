@@ -10,7 +10,7 @@ function reportTransferUrl(address,report){
  const base=new URL(address);
  const local=['localhost','127.0.0.1','[::1]'].includes(base.hostname);
  if((base.protocol!=='https:'&&!(local&&base.protocol==='http:'))||base.username||base.password||base.search||base.hash||base.pathname!=='/')throw Error('Укажите адрес приложения: HTTPS или http://localhost:8000, без пути и параметров.');
- if(!report||report.schema!=='goszakup-status-v1')throw Error('Сначала проверьте статус.');
+ if(!report||report.schema!=='goszakup-status-v1')throw Error('Сначала выполните проверку.');
  const data=JSON.stringify(report);
  if(data.length>12000)throw Error('Отчёт слишком большой.');
  return base.origin+'/settings/extension/report/#'+encodeURIComponent(data);

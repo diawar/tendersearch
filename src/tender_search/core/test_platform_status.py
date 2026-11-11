@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from bs4 import BeautifulSoup
 from django.contrib.auth import get_user_model
-from django.test import TestCase, override_settings
+from django.test import TransactionTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -13,7 +13,7 @@ from .platform_status import health, platform_statuses
 
 @override_settings(STORAGES={'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
                            'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'}})
-class PlatformStatusTests(TestCase):
+class PlatformStatusTests(TransactionTestCase):
     def test_loading_success_and_stale_are_distinct(self):
         now = timezone.now()
         args = dict(completed_at=now, heartbeat_at=now, building=False, now=now)
@@ -31,8 +31,8 @@ class PlatformStatusTests(TestCase):
         MedicalIndex.objects.create(source='fms_ecc', completed_at=now, heartbeat_at=now)
         values = dict(completed_at=now, heartbeat_at=now, ready=True, building=False)
         rows = platform_statuses(values)
-        self.assertEqual(len(rows), 7)
-        self.assertEqual(len({r['key'] for r in rows}), 7)
+        self.assertEqual(len(rows), 8)
+        self.assertEqual(len({r['key'] for r in rows}), 8)
         states = {r['key']: r['state'] for r in rows}
         self.assertEqual(states['med_ecc'], 'loading')
         self.assertEqual(states['fms_ecc'], 'ready')
@@ -60,12 +60,14 @@ class PlatformStatusTests(TestCase):
         self.assertEqual(self.client.get(reverse('index_status')).status_code, 403)
         user.is_superuser = True
         user.save(update_fields=['is_superuser'])
+        from .coverage_snapshot import refresh_snapshot
+        refresh_snapshot()
         response = self.client.get(reverse('index_status'))
         self.assertContains(response, 'База активных закупок')
         self.assertContains(response, 'PRIVATE ERROR')
         self.assertContains(response, 'Состояние загрузки')
         soup = BeautifulSoup(response.content, 'html.parser')
-        self.assertEqual(len(soup.select('.platform-status')), 7)
+        self.assertEqual(len(soup.select('.platform-status')), 8)
         self.assertEqual(len(soup.select('[data-platform="fms_ecc"]')), 1)
         self.assertTrue(soup.select_one('[data-platform="med_ecc"] .platform-spinner'))
         self.assertTrue(soup.select_one('[data-platform="egz"] .platform-check'))
@@ -86,5 +88,7 @@ class PlatformStatusTests(TestCase):
         self.assertEqual(index_coverage()['elapsed_label'], '00:02:05')
         user = get_user_model().objects.create_superuser('admin')
         self.client.force_login(user)
+        from .coverage_snapshot import refresh_snapshot
+        refresh_snapshot()
         self.assertContains(self.client.get(reverse('index_status')), 'Последний обход занял:')
         self.assertContains(self.client.get(reverse('index_status')), '00:02:05')

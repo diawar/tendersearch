@@ -26,19 +26,24 @@ class CompanyRequisitesTests(TestCase):
         self.assertEqual(self.client.get(self.url).context['form'].initial['contact_phone'],self.data['contact_phone'])
         self.client.force_login(self.other)
         self.assertNotContains(self.client.get('/settings/'),'Адрес для проверки')
-        self.assertFalse(CompanySettings.objects.filter(owner=self.other).exists())
+        self.assertEqual(CompanySettings.objects.get(owner=self.other).contact_phone, '')
 
     def test_invalid_bank_codes_and_phone_do_not_write(self):
+        original = CompanySettings.objects.get(owner=self.owner).legal_address
         for key,value in [('bank_account','bad'),('bank_bic','bad'),('contact_phone','abc')]:
             response=self.client.post('/settings/',dict(self.requisites,**{key:value}))
             self.assertEqual(response.status_code,200)
             self.assertTrue(response.context['company_form'].errors)
-            self.assertEqual(CompanySettings.objects.get(owner=self.owner).legal_address,'')
+            self.assertEqual(CompanySettings.objects.get(owner=self.owner).legal_address,original)
 
     def test_bin_only_update_preserves_saved_requisites(self):
-        self.client.post('/settings/',self.requisites)
-        self.client.post('/settings/',{'action':'company','company_bin':'241040001415'})
-        self.assertEqual(CompanySettings.objects.get(owner=self.owner).bank_bic,'HSBKKZKX')
+        self.client.post('/settings/',dict(self.requisites,is_vat_payer='False'))
+        response=self.client.post('/settings/',{'action':'company','company_bin':'241040001415'})
+        self.assertEqual(response.status_code,302)
+        company=CompanySettings.objects.get(owner=self.owner)
+        self.assertEqual(company.bank_bic,'HSBKKZKX')
+        self.assertEqual(company.legal_address,self.requisites['legal_address'])
+        self.assertFalse(company.is_vat_payer)
 
     def test_taxpayer_choice_is_private_validated_and_exported(self):
         self.lot.announcement.external_id=17920228;self.lot.announcement.save()
@@ -56,7 +61,7 @@ class CompanyRequisitesTests(TestCase):
         self.client.post('/settings/',{'action':'company','company_bin':self.requisites['company_bin']})
         self.assertEqual(CompanySettings.objects.get(owner=self.owner).taxpayer_type,'Юридическое лицо')
         self.client.force_login(self.other)
-        self.assertEqual(self.client.get('/settings/').context['company_form'].initial['taxpayer_type'],'')
+        self.assertEqual(self.client.get('/settings/').context['company_form'].initial['taxpayer_type'],'Юридическое лицо')
 
     def test_older_preparation_inherits_type_for_export_but_keeps_saved_choice(self):
         self.lot.announcement.external_id=17920228;self.lot.announcement.save()
@@ -64,6 +69,8 @@ class CompanyRequisitesTests(TestCase):
         saved=ApplicationPreparation.objects.get(owner=self.owner)
         saved.data.pop('taxpayer_type',None);saved.save()
         self.client.post('/settings/',dict(self.requisites,taxpayer_type='Юридическое лицо'))
+        self.assertEqual(self.client.get(self.url+'export/').json()['data']['taxpayer_type'],'Юридическое лицо')
+        saved.data['taxpayer_type']='';saved.save()
         self.assertEqual(self.client.get(self.url+'export/').json()['data']['taxpayer_type'],'Юридическое лицо')
         saved.data['taxpayer_type']='Юридическое лицо нерезидент';saved.save()
         self.assertEqual(self.client.get(self.url+'export/').json()['data']['taxpayer_type'],'Юридическое лицо нерезидент')

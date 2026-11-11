@@ -9,7 +9,7 @@ const window={addEventListener:(type,fn)=>listeners.add(fn),removeEventListener:
  if(data.type==='prepare'){snapshot={status:'ready',company_bin:'241040001415',lot_number:'88537093-ЗЦП1',announcement_number:'17920228-1'};contextQueue=data.queue_context;}
  queueMicrotask(()=>{for(const fn of [...listeners])fn({source:window,origin:'http://localhost:8000',data:{channel:data.channel,id:data.id,...reply}});});
 }};
-const context={window,document:{querySelectorAll:()=>[row],querySelector:s=>s==='#queue-message'?output:{value:'csrf'}},location:{origin:'http://localhost:8000',href:'http://localhost:8000/workspace/drafts/'},crypto:{randomUUID:()=>('a'.repeat(25)+String(++sequence))},URL,JSON,FormData,setTimeout,clearTimeout,setInterval:fn=>tick=fn,
+const context={window,document:{querySelectorAll:()=>[row],querySelector:s=>s==='#queue-message'?output:s==='#queue-csrf [name=csrfmiddlewaretoken]'?{value:'csrf'}:null},location:{origin:'http://localhost:8000',href:'http://localhost:8000/workspace/drafts/'},crypto:{randomUUID:()=>('a'.repeat(25)+String(++sequence))},URL,JSON,FormData,setTimeout,clearTimeout,setInterval:fn=>tick=fn,
  fetch:async(url,options)=>{
   requests.push({url,options});
   return {ok:true,redirected:false,json:async()=>url.endsWith('/packet/')?{packet:{lot_number:'88537093-ЗЦП1'},queue_context:{id:1,generation}}:{saved:true,state:snapshot.status,label:snapshot.status==='complete'?'Черновик готов':'Передано в расширение'}};

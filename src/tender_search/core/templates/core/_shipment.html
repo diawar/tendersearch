@@ -1,0 +1,18 @@
+{% if shipment_form or shared_acts %}
+<section class="panel" id="shipment">
+  <h2>Доставка и акт</h2>
+  {% if shipment.shipped_at %}<p>Отправлено: {{ shipment.shipped_at|date:'d.m.Y H:i' }} · {{ shipment.get_mode_display }}{% if shipment.courier %} · {{ shipment.courier }} · {{ shipment.tracking_number }}{% endif %}</p>{% endif %}
+  {% if shipment_editable %}
+  <form method="post" action="{% url 'shipment_save' lot_id=lot.pk %}">{% csrf_token %}
+    {{ shipment_form.as_p }}<button type="submit">Сохранить отправку</button>
+  </form>
+  {% if shipment.shipped_at %}
+  <form method="post" enctype="multipart/form-data" action="{% url 'shipment_act' lot_id=lot.pk %}">{% csrf_token %}
+    <p><label>Акт приёмки <input type="file" name="act" accept=".pdf,.jpg,.jpeg,.png" required></label></p>
+    <button type="submit">Прикрепить акт и перейти к оплате</button>
+  </form>
+  {% endif %}
+  {% endif %}
+  {% for act in shared_acts %}<p><a href="{% url 'shipment_act_download' lot_id=lot.pk %}?act={{ act.pk }}">Скачать акт · {{ act.act_uploaded_at|date:'d.m.Y H:i' }}</a></p>{% endfor %}
+</section>
+{% endif %}

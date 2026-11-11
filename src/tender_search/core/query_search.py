@@ -29,6 +29,61 @@ class CodePrefix(models.Func):
                 f'WHERE starts_with(code, {prefix}))', [*codes_params, *prefix_params])
 
 
+def text_candidates(matcher):
+    """Necessary conditions only; NULL projections always reach the exact matcher."""
+    from tender_search.morphology import phrase_candidate_prefix
+    conditions = []
+    for _, term, _ in matcher.included:
+        condition = Q(pk__isnull=False)
+        words = term.split() if matcher.kind == 'phrase' else [term]
+        for word in words:
+            prefix = phrase_candidate_prefix(word) if matcher.kind == 'phrase' else word
+            if prefix:
+                condition &= Q(search_text__contains=prefix)
+        conditions.append(condition)
+    combined = Q(pk__isnull=False) if matcher.require_all else Q(pk__in=[])
+    for condition in conditions:
+        combined = combined & condition if matcher.require_all else combined | condition
+    return Q(search_text__isnull=True) | combined
+
+
+def document_sources(sources, spec, prefixes, document_matches):
+    """Union metadata candidates with confirmed document identities, never intersect."""
+    if connection.vendor != 'postgresql' or not settings.SEARCH_DB_PREFILTERS:
+        return sources
+    # A very broad document query is cheaper to stream than to turn into an
+    # unbounded SQL parameter list. This fallback retains every candidate.
+    if len(document_matches) > 5000:
+        return sources
+    groups = {}
+    for source, announcement_id, lot_id in document_matches:
+        lots, announcements = groups.setdefault(source, (set(), set()))
+        if lot_id is None:
+            announcements.add(announcement_id)
+        else:
+            lots.add(lot_id)
+    filtered = []
+    for rows in sources:
+        extra = Q(pk__in=[])
+        medical = rows.model is MedicalIndexedLot
+        for source, (lots, announcements) in groups.items():
+            if not medical and source != 'zakup':
+                continue
+            identity = Q(source_id__in=lots) | Q(row__announcement_id__in=announcements)
+            if medical:
+                identity &= Q(source=source)
+            extra |= identity
+        # Materialize only bounded IDs before fetching large registry JSON.
+        # Combining text/JSON predicates with the payload cursor can otherwise
+        # make PostgreSQL choose a full heap scan despite a tiny result set.
+        limit = settings.SEARCH_CACHE_MAX_CANDIDATES
+        identifiers = set(prefilter(rows, spec, prefixes).values_list('pk', flat=True)[:limit+1])
+        if len(identifiers) <= limit:
+            identifiers.update(rows.filter(extra).values_list('pk', flat=True)[:limit+1])
+        filtered.append(rows.filter(pk__in=identifiers) if len(identifiers) <= limit else rows)
+    return filtered
+
+
 def prefilter(rows, spec, prefixes):
     filters = spec.get('filters', {})
     unknown = Q(search_meta__isnull=True)
@@ -94,11 +149,19 @@ def prefilter(rows, spec, prefixes):
 
 def candidate_sources(sources, spec, prefixes, owner_id, now):
     info = {'enabled': False, 'cache_hit': False}
+    if spec.get('filters', {}).get('in_documents'):
+        return sources, info
     if connection.vendor != 'postgresql' or not settings.SEARCH_DB_PREFILTERS:
         return sources, info
     info['enabled'] = True
-    if not settings.SEARCH_CANDIDATE_CACHE:
-        return [prefilter(rows, spec, prefixes) for rows in sources], info
+    if not settings.SEARCH_CANDIDATE_CACHE or spec.get('filters', {}).get('remaining_hours'):
+        candidates = []
+        for rows in sources:
+            filtered = prefilter(rows, spec, prefixes)
+            identifiers = list(filtered.values_list('pk', flat=True)[:settings.SEARCH_CACHE_MAX_CANDIDATES+1])
+            candidates.append(rows.filter(pk__in=identifiers)
+                if len(identifiers) <= settings.SEARCH_CACHE_MAX_CANDIDATES else filtered)
+        return candidates, info
     epoch, _ = SearchIndexEpoch.objects.get_or_create(pk=1)
     revision = epoch.revision
     # Public IDs only, scoped by owner. Runtime-only profile IDs do not alter
@@ -143,6 +206,8 @@ def search_sources(spec, now, owner_id):
     for key, comparison in [('offer_end_date__gte', 'gte'), ('offer_end_date__lte', 'lte')]:
         if filters.get(key):
             sources = [rows.filter(**{f'deadline__{comparison}': date_value(filters[key])}) for rows in sources]
+    if str(filters.get('remaining_hours')) in {'24', '48'}:
+        sources = [rows.filter(deadline__lte=now+timedelta(hours=int(filters['remaining_hours']))) for rows in sources]
     ids = str(filters.get('delivery_address_id__in') or '').split('__')
     prefixes = [str(ref.raw['code']).rstrip('0') for ref in ReferenceEntry.objects.filter(
         kind__in=['katos', 'cities'], source_id__in=[int(i) for i in ids if i.isdigit()]) if ref.raw.get('code')]

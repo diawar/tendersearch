@@ -53,7 +53,7 @@ class SpecificationTests(TestCase):
             def download(file, destination, **kwargs):
                 path = destination / (file.id + '.txt')
                 path.write_text('<script>Характеристики ' + file.id + '</script>', encoding='utf-8')
-                return {'path': str(path)}
+                return {'path': str(path), 'sha256': file.id.zfill(64)}
             api.download.side_effect = download
             process_specification(job.pk, 'stale')
             api.documents.assert_not_called()

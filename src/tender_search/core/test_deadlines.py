@@ -30,3 +30,12 @@ class DeadlineTests(SimpleTestCase):
             self.assertNotIn('🔴', telegram_remaining_time(now))
             self.assertEqual(deadline_remaining(None), '')
             self.assertEqual(telegram_remaining_time(None), '')
+
+    def test_countdown_embeds_server_time_and_timezone_for_all_shared_views(self):
+        from bs4 import BeautifulSoup
+        now = datetime(2026, 11, 11, 7, tzinfo=dt_timezone.utc)
+        end = (now + timedelta(hours=3)).astimezone(ZoneInfo('Asia/Almaty'))
+        with patch('tender_search.core.deadlines.timezone.now',return_value=now):
+            timer=BeautifulSoup(deadline_remaining(end),'html.parser').span
+        self.assertEqual(datetime.fromisoformat(timer['data-deadline']),end)
+        self.assertEqual(datetime.fromisoformat(timer['data-deadline-now']),now)

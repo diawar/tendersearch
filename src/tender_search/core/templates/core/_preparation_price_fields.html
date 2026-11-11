@@ -1,0 +1,19 @@
+{% load l10n %}
+<div class="preparation-budget">
+<div><span>Количество</span><strong>{{ price_policy.quantity|floatformat:'-6g'|default:'—' }} <small>{{ price_policy.measure }}</small></strong></div>
+<div><span>Бюджет за единицу без НДС</span><strong>{{ price_budget.unit|floatformat:'2g'|default:'—' }} ₸</strong></div>
+<div><span>Бюджет всего без НДС</span><strong>{{ price_budget.total|floatformat:'2g'|default:'—' }} ₸</strong></div>
+</div>
+{{ price_form.non_field_errors }}
+<div class="preparation-price-input">{{ price_form.unit_gross.label_tag }}{{ price_form.unit_gross }}{{ price_form.unit_gross.errors }}{{ price_form.vat_rate }}</div>
+<div class="price-calculations" aria-live="polite">
+<div><span>Наша цена за единицу без НДС{% if price_budget %} · для подачи{% endif %}</span><strong data-price-output="unit_net">{{ price_result.unit_net|floatformat:'2g'|default:'—' }}</strong> ₸</div>
+{% if price_has_vat %}<div><span>НДС за единицу</span><strong data-price-output="unit_vat">{{ price_result.unit_vat|floatformat:'2g'|default:'—' }}</strong> ₸</div>{% endif %}
+<div><span>Наша сумма без НДС{% if price_budget %} · для подачи{% endif %}</span><strong data-price-output="total_net">{{ price_result.total_net|floatformat:'2g'|default:'—' }}</strong> ₸</div>
+{% if price_has_vat %}<div><span>НДС всего</span><strong data-price-output="total_vat">{{ price_result.total_vat|floatformat:'2g'|default:'—' }}</strong> ₸</div>{% endif %}
+<div><span>Наша сумма {% if price_has_vat %}с НДС{% else %}без НДС{% endif %}</span><strong data-price-output="total_gross">{{ price_result.total_gross|floatformat:'2g'|default:'—' }}</strong> ₸</div>
+<p class="error" data-price-budget-error hidden>Наша цена без НДС превышает бюджет. Уменьшите цену за единицу.</p>
+<p class="notice" data-price-rounding hidden>Из-за округления итог отличается от введённой цены × количество (<span data-price-output="desired_total">—</span> ₸) на <span data-price-output="rounding_difference">—</span> ₸.</p>
+</div>
+{% if price_budget %}<div class="price-discount-confirmation" data-price-discount><p>Снижение на 10% и более от бюджета без НДС. Проверьте условия демпинга и дополнительного обеспечения на портале.</p><label>{{ price_form.confirm_discount }} {{ price_form.confirm_discount.label }}</label>{{ price_form.confirm_discount.errors }}</div>
+{% else %}<p class="error">Бюджет без НДС или количество не подтверждены. Цену пока сохранить нельзя.</p>{% endif %}

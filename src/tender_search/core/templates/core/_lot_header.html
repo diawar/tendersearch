@@ -1,6 +1,6 @@
 {% load search_tags %}
 <div id="lot-header">
-<p class="eyebrow">ЛОТ {{ lot.number }} {% procurement_source_badge lot %} {% participation_warning lot %} {% application_portal_status lot %}</p><h1>{{ lot.name }}</h1><p class="muted">{{ lot.customer.name|default:'Заказчик не указан' }}{% if lot.customer.bin %} · БИН {{ lot.customer.bin }}{% endif %}</p>
+<p class="eyebrow">ЛОТ {{ lot.number }} {% include 'core/_copy_lot_number.html' %} {% procurement_source_badge lot %} {% participation_warning lot %} {% application_portal_status lot %}</p><h1>{{ lot.name }}</h1><p class="muted">{{ lot.customer.name|default:'Заказчик не указан' }}{% if lot.customer.bin %} · БИН {{ lot.customer.bin }}{% endif %}</p>
 <div class="stats"><section class="panel"><span>Сумма закупки</span><strong class="price">{{ lot.amount|floatformat:'2g'|default:'—' }} ₸</strong>{% include 'core/_budget_unit_price.html' %}</section><section class="panel"><span>Окончание приёма</span><strong class="date">{{ lot.announcement.deadline|date:'d.m.Y H:i'|default:'Не указано' }}</strong>{% deadline_remaining lot.announcement.deadline %}</section><section class="panel"><span>Статус лота</span><p><span class="badge">{% lot_status lot %}</span></p></section></div>
 <div class="lot-refresh-status">{% if lot.refresh_state == 'running' %}<p class="notice" role="status">Обновляем сведения по карточке объявления…</p>{% endif %}{% if lot.refresh_error %}<p class="error" role="alert">{{ lot.refresh_error }} Показаны ранее сохранённые сведения.</p>{% endif %}
 </div>

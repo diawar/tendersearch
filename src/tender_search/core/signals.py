@@ -28,9 +28,6 @@ def download_when_favorited(sender,instance,created,**kwargs):
         from .workflow_state import syncing, add_to_interesting
         if not syncing.get():
             add_to_interesting(instance.owner_id, instance.lot_id)
-        from .document_service import queue_documents
-        lot_id = instance.lot_id
-        transaction.on_commit(lambda: queue_documents(lot_id))
 
 
 @receiver(post_save, sender=CollectionLot)

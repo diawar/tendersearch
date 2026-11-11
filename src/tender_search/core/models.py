@@ -12,6 +12,12 @@ class Timestamped(models.Model):
         abstract = True
 
 
+class ProcurementCoverageSnapshot(models.Model):
+    """Shared administrative counters, computed outside HTTP requests."""
+    payload = models.JSONField(default=dict)
+    measured_at = models.DateTimeField()
+
+
 class Customer(Timestamped):
     source = models.CharField(max_length=40, default="zakup")
     source_id = models.BigIntegerField()
@@ -44,6 +50,9 @@ class Announcement(Timestamped):
 
 
 class Lot(Timestamped):
+    national_withdrawn = models.BooleanField(null=True, default=None)
+    restriction_checked_at = models.DateTimeField(null=True, blank=True)
+    restriction_source_url = models.URLField(blank=True)
     source_id = models.BigIntegerField()
     announcement = models.ForeignKey(Announcement, on_delete=models.CASCADE, related_name="lots")
     customer = models.ForeignKey(Customer, null=True, blank=True, on_delete=models.SET_NULL)
@@ -71,6 +80,17 @@ class Lot(Timestamped):
         return HOSTS.get(self.announcement.source, 'zakup.gov.kz')
 
     @property
+    def announcement_portal_url(self):
+        from tender_search.medical import HOSTS
+        if self.announcement.source in HOSTS:
+            return self.portal_url
+        identifier = self.announcement.external_id
+        if not identifier:
+            number = self.announcement.number.split('-', 1)[0]
+            identifier = number if number.isdigit() else None
+        return f'https://zakup.gov.kz/cabinet/announcement/{identifier}' if identifier else ''
+
+    @property
     def portal_url(self):
         from tender_search.medical import HOSTS
         if self.announcement.source in HOSTS:
@@ -78,7 +98,15 @@ class Lot(Timestamped):
         return f'https://zakup.gov.kz/announcement/{self.announcement.source_id}#lot-{self.source_id}'
 
 
+class TechnicalDocumentIndex(Timestamped):
+    lot = models.OneToOneField(Lot, on_delete=models.CASCADE, related_name='technical_index')
+    state = models.CharField(max_length=20, default='pending', db_index=True)
+    checked_at = models.DateTimeField(null=True, blank=True)
+    error = models.CharField(max_length=300, blank=True)
+
+
 class Document(Timestamped):
+    kind = models.CharField(max_length=20, default='other', db_index=True)
     announcement = models.ForeignKey(Announcement, on_delete=models.CASCADE, related_name="documents")
     lot = models.ForeignKey(Lot, null=True, blank=True, on_delete=models.SET_NULL)
     source_id = models.CharField(max_length=100)
@@ -99,11 +127,23 @@ class DocumentVersion(Timestamped):
     sha256 = models.CharField(max_length=64, db_index=True)
     storage_path = models.CharField(max_length=500, blank=True)
     text = models.TextField(blank=True)
+    search_text = models.TextField(null=True, editable=False)
     pages = models.JSONField(default=list, blank=True)
     used_ocr = models.BooleanField(default=False)
 
+    def save(self, *args, **kwargs):
+        fields = kwargs.get('update_fields')
+        if fields is None or 'text' in fields:
+            from tender_search.matching import normalize
+            self.search_text = normalize(self.text)
+            if fields is not None:
+                kwargs['update_fields'] = set(fields) | {'search_text'}
+        return super().save(*args, **kwargs)
+
     class Meta:
         constraints = [models.UniqueConstraint(fields=["document", "sha256"], name="unique_document_version")]
+        indexes = [models.Index(fields=['id'], condition=models.Q(search_text__isnull=True),
+            name='idx_document_text_pending')]
 
 
 class LotDocumentDownload(Timestamped):
@@ -156,7 +196,7 @@ class SearchProfile(Timestamped):
 
 
 class CollectionLot(Timestamped):
-    STAGES = [('new', 'Сохранён в подборку'), ('interesting', 'Интересные лоты'), ('applied', 'Подали заявку'),
+    STAGES = [('new', 'Сохранён в подборку'), ('interesting', 'Интересные лоты'), ('preparing', 'Подготовка заявки'), ('applied', 'Подали заявку'),
               ('won', 'Выиграли'), ('lost', 'Проиграли'), ('not_participated', 'Не участвовали'), ('contract', 'Заключение договора'), ('delivery', 'Поставка'), ('payment', 'Оплата'), ('archived', 'Архив')]
     OUTCOMES = [('', 'Решение не указано'), ('won', 'Выиграли'), ('lost', 'Не выиграли')]
     profile = models.ForeignKey(SearchProfile, on_delete=models.CASCADE, related_name='collection_lots')
@@ -229,8 +269,10 @@ class DraftQueueItem(Timestamped):
     generation = models.UUIDField(default=uuid.uuid4, editable=False)
     state = models.CharField(max_length=20, default='queued', choices=[
         ('queued','Ожидает'),('ready','Передано в расширение'),('running','Заполняется'),
-        ('paused','Приостановлено'),('blocked','Требует проверки'),('complete','Черновик готов'),('cancelled','Убрано из очереди')])
+        ('waiting','Ожидание восстановления'),('paused','Приостановлено'),('blocked','Требует проверки'),('complete','Черновик готов'),('cancelled','Убрано из очереди')])
     message = models.CharField(max_length=500, blank=True)
+    progress_phase = models.CharField(max_length=20, blank=True)
+    portal_check = models.JSONField(default=dict, blank=True)
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=['owner','lot'], name='unique_draft_queue_lot')]
@@ -530,6 +572,7 @@ class TelegramDelivery(Timestamped):
     state = models.CharField(max_length=20, default="pending")
     error = models.CharField(max_length=200, blank=True)
     message_id = models.BigIntegerField(null=True, blank=True)
+    interest_token = models.UUIDField(null=True, blank=True, editable=False)
     retry_at = models.DateTimeField(null=True, blank=True)
     class Meta:
         constraints = [models.UniqueConstraint(fields=["owner", "announcement_key"], name="unique_owner_telegram_announcement")]
@@ -591,15 +634,34 @@ class UserLotPrice(Timestamped):
 
 
 class CompanySettings(Timestamped):
+    is_vat_payer = models.BooleanField(default=True)
     owner = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    company_bin = models.CharField(max_length=12, blank=True)
-    company_name = models.CharField(max_length=500, blank=True)
-    legal_address = models.CharField(max_length=1000, blank=True)
-    bank_account = models.CharField(max_length=20, blank=True)
-    bank_name = models.CharField(max_length=200, blank=True)
-    bank_bic = models.CharField(max_length=11, blank=True)
+    company_bin = models.CharField(max_length=12, blank=True, default="241040001415")
+    company_name = models.CharField(max_length=500, blank=True, default="ТОО \"OVERSHOP.KZ\"")
+    address_city = models.CharField(max_length=200, blank=True, default="Павлодар")
+    address_street = models.CharField(max_length=300, blank=True, default="Желтоксан")
+    address_house = models.CharField(max_length=50, blank=True, default="7")
+    address_office = models.CharField(max_length=50, blank=True, default="25Б")
+    legal_address = models.CharField(max_length=1000, blank=True, default="Павлодар, Желтоксан, 7, 25Б")
+    bank_account = models.CharField(max_length=20, blank=True, default="KZ92601A241008980281")
+    bank_name = models.CharField(max_length=200, blank=True, default="АО \"Народный Банк Казахстана\"")
+    bank_bic = models.CharField(max_length=11, blank=True, default="HSBKKZKX")
     contact_phone = models.CharField(max_length=25, blank=True)
-    taxpayer_type = models.CharField(max_length=200, blank=True)
+    taxpayer_type = models.CharField(max_length=200, blank=True, default="Юридическое лицо")
+
+
+class LotShipment(Timestamped):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
+    mode = models.CharField(max_length=16, choices=[('courier', 'Курьерская служба'), ('own', 'Своими силами')])
+    courier = models.CharField(max_length=200, blank=True)
+    tracking_number = models.CharField(max_length=200, blank=True)
+    shipped_at = models.DateTimeField(null=True, blank=True)
+    act = models.FileField(upload_to='private-acts/%Y/%m/', blank=True)
+    act_uploaded_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['owner', 'lot'], name='unique_owner_lot_shipment')]
 
 
 class LotOutcomeWatch(Timestamped):
@@ -640,6 +702,19 @@ class OutcomeDelivery(Timestamped):
     error = models.CharField(max_length=200, blank=True)
 
 
+class WorkflowDelivery(Timestamped):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
+    company_bin = models.CharField(max_length=12)
+    kind = models.CharField(max_length=20)
+    event_key = models.CharField(max_length=64, unique=True)
+    payload = models.JSONField(default=dict)
+    state = models.CharField(max_length=20, default='pending', db_index=True)
+    retry_at = models.DateTimeField(null=True, blank=True)
+    message_id = models.BigIntegerField(null=True, blank=True)
+    error = models.CharField(max_length=200, blank=True)
+
+
 class LotSpecification(Timestamped):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
@@ -649,3 +724,11 @@ class LotSpecification(Timestamped):
     error = models.CharField(max_length=300, blank=True)
     class Meta:
         constraints = [models.UniqueConstraint(fields=['owner','lot'], name='unique_owner_lot_specification')]
+
+
+class TechnicalIndexProgress(models.Model):
+    started_at = models.DateTimeField()
+    completed_at = models.DateTimeField(null=True, blank=True)
+    targets = models.JSONField(default=list)
+    counts = models.JSONField(default=dict)
+    updated_at = models.DateTimeField(auto_now=True)

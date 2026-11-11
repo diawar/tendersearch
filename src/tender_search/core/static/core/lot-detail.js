@@ -61,6 +61,7 @@
   }
 
   async function poll() {
+    if (document.hidden) return;
     if (polling || posting) { schedule(); return; }
     polling = true;
     const requestedGeneration = generation;

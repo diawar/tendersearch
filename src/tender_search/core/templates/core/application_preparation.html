@@ -1,42 +1,36 @@
-{% extends 'core/base.html' %}{% load search_tags static %}
+{% extends 'core/base.html' %}{% load search_tags static l10n %}
 {% block title %}Подготовка заявки — Госзакупки{% endblock %}
 {% block content %}
-<a href="{% url 'lot_detail' lot_id=lot.pk %}">← К лоту</a>
-<h1>Подготовка заявки</h1><p><a class="outline" href="{% url 'notification_settings' %}#chrome-extension">Расширение Chrome · скачать и установить</a></p>
-<section class="panel"><h2>{{ lot.name }}</h2><p>Лот {{ lot.number }} · Объявление {{ lot.announcement.number }}</p>
+<div class="preparation-page">
+<div class="page-heading"><div><a href="{% url 'workspace' %}?profile=all&amp;stage=preparing">← К подготовке заявок</a><h1>Подготовка заявки</h1></div><a href="{% url 'notification_settings' %}#chrome-extension">Установка расширения</a></div>
+<section class="panel preparation-summary">
+<h2>{{ lot.name }}</h2><p>Лот {{ lot.number }} {% include 'core/_copy_lot_number.html' %} · Объявление {{ lot.announcement.number }}</p>
 {% participation_warning lot %}
-<p>БИН вашей организации: <strong>{{ company_bin|default:'Не указан' }}</strong> · <a href="{% url 'notification_settings' %}#company-settings">Настройки</a></p>
-<p class="notice">Сохраните данные и передайте их расширению для заполнения черновика на Госзакупе. Обеспечение, цена, подписание и отправка выполняются вручную на портале.</p>
-{% if bin_changed %}<p class="error" role="status">БИН изменён после сохранения. Проверьте реквизиты: прежние данные были сохранены для БИН {{ preparation.company_bin }}.</p>{% endif %}
-{% if not editable %}<p>Просмотр сохранённых данных. Редактирование доступно на этапе «Интересные лоты».</p>{% endif %}
+<div class="preparation-status" role="status">
+<strong>{% if preparation.portal_state == 'submitted' %}Заявка подана{% elif preparation.portal_state == 'completed' %}Заявка завершена на портале{% elif preparation.portal_description_saved_at %}Черновик заполнен{% elif preparation.portal_state == 'draft' %}Черновик создан · заполнение не завершено{% elif preparation %}Данные сохранены · черновик ещё не подтверждён{% else %}Заполните данные для черновика{% endif %}</strong>
+{% if preparation.portal_number %}<a href="{{ preparation.portal_url }}" target="_blank" rel="noopener noreferrer">Заявка № {{ preparation.portal_number }} ↗</a>{% endif %}
+</div>
+{% if preparation.portal_sync_error %}<p class="error">{{ preparation.portal_sync_error }}</p>{% endif %}
+{% if bin_changed %}<p class="error">БИН организации изменён. Проверьте реквизиты и сохраните подготовку заново.</p>{% endif %}
+{% if not editable %}<p class="muted">{% if preparation_busy %}Идёт заполнение черновика. Чтобы изменить данные, сначала остановите заполнение в расширении.{% else %}Просмотр сохранённых данных. Редактирование доступно на этапе «Подготовка заявки».{% endif %}</p>{% endif %}
 </section>
-<section class="panel"><h2>Данные для заполнения заявки</h2>
-{% if preparation %}<div class="notice" role="status"><strong>{% if preparation.portal_state == 'draft' %}Черновик создан{% elif preparation.portal_state == 'submitted' %}Заявка подана{% elif preparation.portal_state == 'completed' %}Заявка завершена на портале{% else %}Создание черновика не подтверждено{% endif %}</strong>
-{% if preparation.portal_state == 'completed' %}<p>Статус заявки не определяет победу или проигрыш. Итоги проверяются отдельно.</p>{% endif %}
-{% if preparation.portal_number %}<p>Заявка № {{ preparation.portal_number }} · <a href="{{ preparation.portal_url }}" target="_blank" rel="noopener noreferrer">Открыть заявку ↗</a></p>{% endif %}
-{% if preparation.portal_description_saved_at %}<p><strong>Описание товара заполнено</strong> · {{ preparation.portal_description_saved_at|date:'d.m.Y H:i' }}</p>{% elif preparation.portal_state == 'draft' %}<p>Заполнение описания товара пока не подтверждено.</p>{% endif %}
-{% if preparation.portal_confirmed_at %}<p>Подтверждено отчётом расширения: {{ preparation.portal_confirmed_at|date:'d.m.Y H:i' }}</p>{% endif %}
-{% if preparation.portal_checked_at %}<p>Последняя проверка: {{ preparation.portal_checked_at|date:'d.m.Y H:i' }}</p>{% endif %}
-{% if preparation.portal_sync_error %}<p>{{ preparation.portal_sync_error }}</p>{% endif %}
-<form method="post" enctype="multipart/form-data" action="{% url 'preparation_status' lot_id=lot.pk %}">{% csrf_token %}<label>Отчёт расширения <input type="file" name="report" accept=".json,application/json" required></label><button class="outline" type="submit">Обновить статус</button></form>
-<p class="muted">Отчёт можно передать кнопкой из расширения или загрузить файлом. Непрерывная фоновая синхронизация пока не подключена.</p></div>{% endif %}
-<form method="post" autocomplete="off" id="preparation-form">{% csrf_token %}{{ form.non_field_errors }}
-<div class="form-grid">{% for field in form %}<div class="field">{{ field.label_tag }}{{ field }}{{ field.errors }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}</div>{% endfor %}</div>
-{% if editable %}<button class="outline" type="submit">Сохранить подготовку</button>{% endif %}
+<section class="panel"><h2>Товар, цена и реквизиты</h2>
+<p class="muted">БИН {{ company_bin|default:'не указан' }} · <a href="{% url 'notification_settings' %}#company-settings">Реквизиты организации</a></p>
+<form method="post" autocomplete="off" id="preparation-form"{% if price_policy %} class="lot-price-form" data-quantity="{{ price_policy.quantity_text }}" data-budget-unit="{{ price_budget.unit|unlocalize }}" data-budget-total="{{ price_budget.total|unlocalize }}"{% endif %}>{% csrf_token %}{{ form.non_field_errors }}
+{% if price_policy %}{% include 'core/_preparation_price_fields.html' %}{% endif %}
+<h3>Товар и реквизиты</h3><div class="form-grid">{% for field in form %}<div class="field">{{ field.label_tag }}{{ field }}{{ field.errors }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}</div>{% endfor %}</div>
+{% if editable %}<div class="actions"><button class="button preparation-cta" type="submit">Сохранить подготовку</button>{% if preparation %}<small class="muted">Сохранено {{ preparation.updated_at|date:'d.m.Y H:i' }}</small>{% endif %}</div>{% endif %}
 </form>
-{% if preparation and editable and not bin_changed %}{% if export_supported %}
-{% if draft_registry_positions > 1 %}<label class="preparation-repeat"><input type="checkbox" id="preparation-repeat-product"> Один и тот же товар для всех позиций этого лота</label>{% endif %}
-<div class="actions"><button type="button" class="button" id="prepare-with-extension" data-export-url="{% url 'preparation_export' lot_id=lot.pk %}">Подготовить черновик</button></div>
-<form method="post" action="{% url 'draft_queue_add' %}">{% csrf_token %}<input type="hidden" name="lots" value="{{ lot.pk }}"><button type="submit" class="outline">В очередь черновиков</button></form>
-<p class="muted">Кнопка передаст сохранённые данные расширению и откроет объявление Госзакупа. На его вкладке откройте расширение и запустите заполнение.</p>
+</section>
+{% if editable %}<section class="panel preparation-launch"><h2>Черновик на Госзакупе</h2>
+{% if preparation and not bin_changed %}{% if export_supported %}
+<button type="button" class="button preparation-cta" id="prepare-with-extension" data-export-url="{% url 'preparation_export' lot_id=lot.pk %}">Создать черновик через расширение</button>
+<p class="muted">Откроется объявление Госзакупа. В расширении нажмите «Создать / продолжить черновик».</p>
 <p id="preparation-bridge-result" role="status" aria-live="polite"></p>
-<details><summary>Передача файлом</summary><p><a class="outline" href="{% url 'preparation_export' lot_id=lot.pk %}">Скачать данные для расширения</a></p></details>
-{% else %}<p class="muted">Экспорт для расширения недоступен: площадка лота не поддерживается или не подтверждена.</p>{% endif %}{% endif %}
-{% if preparation %}<p class="muted">Сохранено {{ preparation.updated_at|date:'d.m.Y H:i' }}</p>{% endif %}
-</section>
-<section class="panel"><h2>Дальше на портале</h2>
-<p>Сверьте реквизиты с профилем организации, описание — с конкретным товаром. Проверьте допуск к участию, количество и сумму обеспечения на портале. Цена вводится через CryptoSocket, подписание и отправка выполняются вручную.</p>
-<a class="outline" href="{{ lot.portal_url }}" target="_blank" rel="noopener noreferrer">Открыть объявление ↗</a>
-</section>
+{% else %}<p>Для этого лота подготовка через расширение недоступна: площадка не поддерживается или не подтверждена.</p>{% endif %}
+{% else %}<p>Сначала сохраните данные товара и реквизиты.</p>{% endif %}
+<p class="muted">На портале проверьте черновик, укажите цену и обеспечение. Подписание и отправка выполняются вами. Этап «Подали заявку» включится после подтверждения с Госзакупа.</p>
+</section>{% endif %}
+</div>
 <script defer src="{% static 'core/preparation_bridge.js' %}"></script>
 {% endblock %}

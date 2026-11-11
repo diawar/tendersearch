@@ -152,7 +152,8 @@ class IndexTests(TestCase):
         self.assertEqual(job.hits.get().lot.source_id,50000)
         self.assertEqual(job.status,'partial')
         self.assertFalse(job.complete)
-        self.assertEqual(job.source_counts['__index__']['loaded'],1)
+        self.assertIsNone(job.source_counts['__index__']['loaded'])
+        self.assertFalse(job.source_counts['__index__']['diagnostics_measured'])
 
     def test_completed_and_stale_coverage_are_distinct(self):
         put(row())

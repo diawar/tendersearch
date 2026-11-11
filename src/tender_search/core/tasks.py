@@ -67,3 +67,9 @@ def check_lot_contract(watch_id, lease):
 def extract_lot_specification(job_id, generation):
     from .specification_service import process_specification
     process_specification(job_id, generation)
+
+
+@shared_task(soft_time_limit=600, time_limit=630)
+def index_technical_documents(index_id):
+    from .technical_documents import process
+    process(index_id)

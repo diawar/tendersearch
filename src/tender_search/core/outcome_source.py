@@ -93,6 +93,20 @@ def parse_lot_result(text, announcement_number, lot_number, company_bin):
     for block in blocks:
         counts.update(int(value) for value in re.findall(
             r'Количество\s+(?:поданных|представленных)\s+заявок\s*[:\-]?\s*(\d+)', compact(block), re.I))
+    # Published ZCP PDFs count accepted and portal-rejected offers separately.
+    # Both headings are required; an absent/reformatted section is not zero.
+    if not counts:
+        totals = []
+        for block in blocks:
+            flat = compact(block)
+            accepted = re.findall(r'Потенциальными\s+поставщиками\s+представлены\s+следующие\s+ценовые\s+предложения\s*:\s*(\d+)', flat, re.I)
+            rejected = re.findall(r'Ценовые\s+предложения\s+потенциальных\s+поставщиков,\s*автоматически\s+отклоненные\s+веб-порталом\s*:\s*(\d+)', flat, re.I)
+            if len(accepted) != 1 or len(rejected) != 1:
+                totals = []
+                break
+            totals.append(int(accepted[0]) + int(rejected[0]))
+        if totals:
+            counts = set(totals)
     # Presence proves participation; absence requires a verified full count.
     complete = counts == {len(participants)} and len(participants) > 0
     return Outcome(state,winner,participants[winner],participants_complete=complete)

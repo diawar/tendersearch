@@ -1,7 +1,9 @@
 {% if can_manage_users %}
-<section class="panel index-coverage platform-coverage" id="index-coverage" aria-label="База активных закупок" hx-get="{% url 'index_status' %}" hx-trigger="every 15s" hx-swap="outerHTML">
+<section class="panel index-coverage platform-coverage" id="index-coverage" aria-label="База активных закупок" hx-get="{% url 'index_status' %}" data-background-poll hx-trigger="every 15s, app:resume" hx-swap="outerHTML">
 <strong>База активных закупок</strong>
-{% if index_coverage.elapsed_label %}<div class="coverage-timing">{% if index_coverage.building %}Время с начала обхода:{% else %}Последний обход занял:{% endif %} <strong data-index-elapsed="{{ index_coverage.elapsed_seconds }}" data-running="{{ index_coverage.building|yesno:'true,false' }}">{{ index_coverage.elapsed_label }}</strong></div>{% endif %}
+{% if coverage_pending %}<p class="muted">Показатели базы рассчитываются в фоне.</p>{% else %}
+<small class="muted">Показатели на {{ coverage_measured_at|date:'d.m.Y H:i:s' }} по Алматы{% if coverage_stale %} · обновление показателей задерживается{% endif %}</small>
+{% if index_coverage.elapsed_label %}<div class="coverage-timing">{% if index_coverage.building %}Время с начала обхода:{% else %}Последний обход занял:{% endif %} <strong data-index-elapsed="{{ index_coverage.elapsed_seconds }}" data-running="{{ index_coverage.counter_running|yesno:'true,false' }}">{{ index_coverage.elapsed_label }}</strong></div>{% endif %}
 <ul class="platform-status-list">
 {% for platform in platform_statuses %}
 <li class="platform-status platform-status--{{ platform.state }}" data-platform="{{ platform.key }}" title="{{ platform.label }}{% if platform.completed_at %}. Последнее обновление: {{ platform.completed_at|date:'d.m.Y H:i' }} по Алматы{% endif %}">
@@ -20,5 +22,6 @@
 {% if index_coverage.error %}<div class="error">{{ index_coverage.error }}</div>{% endif %}
 {% if medical_coverage.error %}<div class="error">{{ medical_coverage.error }}</div>{% endif %}
 </details>{% endif %}
+{% endif %}
 </section>
 {% endif %}

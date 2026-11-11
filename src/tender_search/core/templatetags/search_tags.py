@@ -36,7 +36,12 @@ def application_portal_status(lot):
 def participation_warning(lot):
     # Unknown eligibility is not evidence of a restriction. Do not show an
     # alarming per-lot badge until a specific portal restriction is verified.
-    return ''
+    if (lot.announcement.source != 'zakup' or
+            getattr(lot, 'national_withdrawn', None) is not True or
+            not getattr(lot, 'restriction_checked_at', None)):
+        return ''
+    return format_html('<span class="badge" style="background:#fff3cd;color:#664d03" title="{}">Изъятие из национального режима</span>',
+        'Признак «Да» подтверждён в карточке этого лота. Допуск вашей организации проверяется отдельно на Госзакупе. Проверено: ' + str(lot.restriction_checked_at))
 
 
 @register.simple_tag
@@ -61,11 +66,13 @@ def procurement_source_badge(lot, all_platforms=False):
 @register.simple_tag
 def deadline_remaining(deadline):
     from tender_search.core.deadlines import remaining_time
-    text, urgent = remaining_time(deadline)
+    from django.utils import timezone
+    now = timezone.now()
+    text, urgent = remaining_time(deadline, now=now)
     if not text:
         return ''
-    return format_html('<span class="deadline-remaining{}">{}</span>',
-                       ' deadline-remaining--urgent' if urgent else '', text)
+    return format_html('<span class="deadline-remaining{}" data-deadline="{}" data-deadline-now="{}">{}</span>',
+                       ' deadline-remaining--urgent' if urgent else '', deadline.isoformat(), now.isoformat(), text)
 
 
 @register.filter
@@ -157,3 +164,21 @@ def condition_controls(spec):
         controls.append({"label":label,"field":field,"value":value})
     controls.extend({"label":term,"field":"exclude","value":term} for term in spec.get("exclude",[]))
     return controls
+
+
+@register.simple_tag
+def lot_budget(lot):
+    from tender_search.core.lot_pricing import lot_budget_display
+    return lot_budget_display(lot)
+
+
+@register.filter
+def short_measure(value):
+    name=str(value or '').strip()
+    return {'штука':'шт.','штук':'шт.','шт':'шт.','шт.':'шт.','комплект':'компл.','набор':'набор','килограмм':'кг','грамм':'г','метр':'м','литр':'л','упаковка':'уп.','рулон':'рул.','пара':'пар.'}.get(name.casefold(),name)
+
+
+@register.simple_tag
+def draft_steps(item):
+    from tender_search.core.draft_progress import steps_for
+    return steps_for(item)

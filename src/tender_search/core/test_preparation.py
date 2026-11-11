@@ -23,6 +23,7 @@ class PreparationTests(TestCase):
     def setUp(self):
         from .test_lot_pricing import LotPricingTests
         LotPricingTests.setUp(self)
+        for user in (self.owner,self.other):update_workflow(user.pk,self.lot.pk,stage='preparing')
         CompanySettings.objects.update_or_create(owner=self.owner,defaults={'company_bin':'241040001415'})
         self.url=f'/lots/{self.lot.pk}/preparation/'
         self.data={'product_name':'Товар','manufacturer':'Завод','country':'Казахстан',
@@ -33,7 +34,7 @@ class PreparationTests(TestCase):
         self.assertEqual(self.client.post(self.url,self.data).status_code,302)
         p=ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot)
         self.assertEqual(p.company_bin,'241040001415')
-        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'interesting')
+        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'preparing')
         self.assertFalse(UserLotPrice.objects.filter(owner=self.owner,lot=self.lot,locked_at__isnull=False).exists())
         self.client.force_login(self.other)
         response=self.client.get(self.url)
@@ -76,7 +77,7 @@ class PreparationTests(TestCase):
     def test_fulfillment_is_read_only_and_changed_bin_is_flagged(self):
         self.client.post(self.url,self.data)
         CompanySettings.objects.filter(owner=self.owner).update(company_bin='123456789012')
-        self.assertContains(self.client.get(self.url),'БИН изменён')
+        self.assertContains(self.client.get(self.url),'БИН организации изменён')
         update_workflow(self.owner.pk,self.lot.pk,stage='applied')
         self.assertEqual(self.client.post(self.url,self.data).status_code,403)
         self.assertContains(self.client.get(self.url),'Просмотр сохранённых данных')
@@ -123,11 +124,11 @@ class PreparationTests(TestCase):
         self.assertEqual(response.status_code,200)
         self.assertIn('attachment',response['Content-Disposition'])
         self.assertEqual(response.json()['announcement_external_id'],'17926777')
-        self.assertContains(self.client.get(self.url),'Скачать данные для расширения')
+        self.assertContains(self.client.get(self.url),'Создать черновик через расширение')
         for system in (2,3,6,7,99):
             announcement.raw={'system':{'id':system}};announcement.save()
             self.assertRedirects(self.client.get(self.url+'export/'),self.url)
-            self.assertNotContains(self.client.get(self.url),'Скачать данные для расширения')
+            self.assertNotContains(self.client.get(self.url),'Создать черновик через расширение')
         announcement.raw={};announcement.save()
         self.lot.raw={};self.lot.save()
         self.assertRedirects(self.client.get(self.url+'export/'),self.url)

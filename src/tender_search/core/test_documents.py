@@ -21,7 +21,7 @@ class FavoriteDocumentTests(TestCase):
         self.client.force_login(self.owner)
     def api(self):
         api=Mock()
-        api.documents.return_value=[SourceDocument('common','terms.pdf','https://zakup.gov.kz/terms',1100,None,None),SourceDocument('lot','spec.pdf','https://zakup.gov.kz/spec',1100,600,None),SourceDocument('other','other.pdf','https://zakup.gov.kz/other',1100,601,None)]
+        api.documents.return_value=[SourceDocument('common','contract.pdf','https://zakup.gov.kz/terms',1100,None,None),SourceDocument('lot','contract-lot.pdf','https://zakup.gov.kz/spec',1100,600,None),SourceDocument('other','other.pdf','https://zakup.gov.kz/other',1100,601,None)]
         def save(doc,directory):
             digest=hashlib.sha256(doc.id.encode()).hexdigest()
             path=directory/(digest+'.pdf');path.write_bytes(doc.id.encode())
@@ -43,7 +43,7 @@ class FavoriteDocumentTests(TestCase):
         with patch('tender_search.core.tasks.download_favorite_documents.delay') as task:
             with self.captureOnCommitCallbacks(execute=True):
                 self.client.post(f'/lots/{self.lot.pk}/favorite/',{'action':'add'})
-            task.assert_called_once_with(self.lot.pk)
+            task.assert_not_called()
     def test_remove_deletes_files_and_keeps_other_users_copy(self):
         self.download()
         Favorite.objects.create(owner=self.other,lot=self.lot)
@@ -51,10 +51,9 @@ class FavoriteDocumentTests(TestCase):
         cleanup_documents(self.lot.announcement_id)
         self.assertEqual(DocumentVersion.objects.count(),2)
         Favorite.objects.filter(owner=self.other).delete()
-        with self.captureOnCommitCallbacks(execute=True):
-            cleanup_documents(self.lot.announcement_id)
-        self.assertFalse(Document.objects.exists())
-        self.assertFalse(list(Path(self.temp.name).iterdir()))
+        # Active workflows retain the common files even without a favorite.
+        cleanup_documents(self.lot.announcement_id)
+        self.assertEqual(DocumentVersion.objects.count(),2)
     def test_download_requires_own_favorite(self):
         self.download();version=DocumentVersion.objects.first()
         url=f'/lots/{self.lot.pk}/documents/{version.pk}/'

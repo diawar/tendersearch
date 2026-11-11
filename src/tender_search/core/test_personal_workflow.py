@@ -2,7 +2,7 @@ from datetime import timedelta
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from .models import CollectionLot, SearchProfile, UserLotPrice, UserLotWorkflow, Favorite, AnnouncementWatch
-from .workflow_state import add_to_interesting, inherit_workflows
+from .workflow_state import add_to_interesting, inherit_workflows, update_workflow
 from .outcome_service import move_closed_unsubmitted
 
 
@@ -14,17 +14,19 @@ class PersonalWorkflowTests(TestCase):
         LotPricingTests.setUp(self)
         self.item = CollectionLot.objects.get(profile__owner=self.owner,lot=self.lot)
 
-    def test_delete_filter_preserves_applied_price_and_cancel(self):
-        self.assertEqual(self.client.post(self.endpoint,{'unit_gross':'116'}).status_code,302)
+    def test_delete_filter_preserves_applied_price_without_manual_cancel(self):
+        # Legacy manual mark remains cancellable; a portal-confirmed bid is covered separately.
+        update_workflow(self.owner.pk,self.lot.pk,stage='applied',result_tracking=True)
+        UserLotPrice.objects.create(owner=self.owner,lot=self.lot,unit_gross=116,vat_rate=16,locked_at=timezone.now())
         self.client.post(f'/profiles/{self.item.profile_id}/delete/')
         retained=CollectionLot.objects.get(profile__owner=self.owner,lot=self.lot)
         self.assertTrue(retained.profile.filters['manual'])
         self.assertEqual(retained.stage,'applied')
         self.assertTrue(UserLotPrice.objects.get(owner=self.owner,lot=self.lot).locked_at)
         self.assertTrue(AnnouncementWatch.objects.get(owner=self.owner,announcement=self.lot.announcement).enabled)
-        self.assertEqual(self.client.post(f'/lots/{self.lot.pk}/application/cancel/').status_code,302)
-        retained.refresh_from_db();self.assertEqual(retained.stage,'interesting')
-        self.assertIsNone(UserLotPrice.objects.get(owner=self.owner,lot=self.lot).locked_at)
+        self.assertEqual(self.client.post(f'/lots/{self.lot.pk}/application/cancel/').status_code,404)
+        retained.refresh_from_db();self.assertEqual(retained.stage,'applied')
+        self.assertIsNotNone(UserLotPrice.objects.get(owner=self.owner,lot=self.lot).locked_at)
 
     def test_switching_watched_lot_invalidates_pending_messages_and_running_check(self):
         from .models import StatusDelivery

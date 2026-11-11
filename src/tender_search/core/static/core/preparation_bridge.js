@@ -32,7 +32,6 @@
    const response=await fetch(url.href,{credentials:'same-origin',cache:'no-store'});
    if(response.redirected||!response.ok||!response.headers.get('Content-Type')?.includes('application/json'))throw Error('Не удалось получить подготовку. Проверьте вход, сохранённые данные и БИН организации.');
    const packet=await response.json();
-   packet.repeat_product=document.querySelector('#preparation-repeat-product')?.checked===true;
    output.textContent='Передаём подготовку в расширение…';
    const result=await request('prepare',packet,12000,extension.extensionId);
    output.textContent=result.opened?'Данные переданы, объявление открыто в новой вкладке. На Госзакупе откройте расширение и нажмите «Создать / продолжить черновик».':'Данные переданы. Откройте объявление Госзакупа и запустите заполнение в расширении.';

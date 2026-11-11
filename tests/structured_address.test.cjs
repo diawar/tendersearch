@@ -1,0 +1,12 @@
+const assert=require('node:assert/strict'),fs=require('node:fs');
+const source=fs.readFileSync('extensions/goszakup-assistant/draft.js','utf8');
+const code=source.slice(source.indexOf(' const matchAddress='),source.indexOf(' const accountMatches='));
+const norm=v=>String(v||'').toLowerCase().replace(/ё/g,'е').replace(/\s+/g,' ').trim();
+const compact=v=>norm(v).replace(/[^\p{L}\d]/gu,'');
+const packet={data:{address_parts:{city:'Павлодар',street:'Желтоксан',house:'7',office:'25Б'}}};
+const match=Function('packet','norm','compact',code+';return matchAddress;')(packet,norm,compact);
+const real='КАЗАХСТАН, 551010000, none, Павлодарская область, г.Павлодар, Желтоксан, 7, 25Б';
+assert.equal(match(real),true);
+for(const bad of [real.replace(', 7,',', 17,'),real.replace('25Б','25'),real.replace('25Б','125Б'),real.replace('Желтоксан','Абая'),real.replace('г.Павлодар','г.Астана')])assert.equal(match(bad),false,bad);
+packet.data.address_parts.city='г. Павлодар';packet.data.address_parts.street='улица Желтоксан';assert.equal(match(real),true);
+console.log('Structured address: live portal format and conflicting house/room/street/city passed');

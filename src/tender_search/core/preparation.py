@@ -61,11 +61,8 @@ def supports_preparation_export(lot):
 
 def draft_position_count(lot):
     """Count identity-checked registry plan entries, not editable application groups."""
-    from .models import AnnouncementLotCache
-    detail=(lot.raw or {}).get('_pricing_detail')
-    if not isinstance(detail,dict) or detail.get('id')!=lot.source_id:
-        cached=AnnouncementLotCache.objects.filter(pk=lot.announcement.source_id).first()
-        detail=next((row for row in (cached.rows if cached else []) if row.get('id')==lot.source_id),None)
+    from .lot_pricing import cached_pricing_detail
+    detail=cached_pricing_detail(lot)
     if not detail or detail.get('is_combined') is not False or not supports_preparation_export(lot):return None
     plans=detail.get('plan_items')
     if not isinstance(plans,list) or not 1<=len(plans)<=20:return None
@@ -80,56 +77,84 @@ def draft_position_count(lot):
 
 @login_required
 @require_http_methods(['GET','POST'])
-def prepare_application(request, lot_id):
+def prepare_application(request, lot_id, price_form=None):
     lot=get_object_or_404(Lot.objects.select_related('announcement'),pk=lot_id)
     workflow=get_object_or_404(UserLotWorkflow,owner=request.user,lot=lot)
-    if workflow.stage not in ('interesting','applied','won','lost','contract','delivery','payment','archived'):
+    if workflow.stage not in ('interesting','preparing','applied','won','lost','contract','delivery','payment','archived'):
         raise PermissionDenied
     saved=ApplicationPreparation.objects.filter(owner=request.user,lot=lot).first()
-    company_bin=CompanySettings.objects.filter(owner=request.user).values_list('company_bin',flat=True).first() or ''
-    editable=workflow.stage=='interesting'
+    from .models import DraftQueueItem
+    preparation_busy=DraftQueueItem.objects.filter(owner=request.user,lot=lot,state__in=('running','waiting')).exists()
+    editable=workflow.stage == 'preparing' and not preparation_busy
     company=CompanySettings.objects.filter(owner=request.user).first()
+    company_bin=company.company_bin if company else ''
+    from .lot_pricing import attach_lot_budgets
+    attach_lot_budgets([lot])
     initial={key:getattr(company,key,'') for key in ('legal_address','bank_account','contact_phone','taxpayer_type')}
     if saved:initial.update(saved.data)
-    form=PreparationForm(request.POST if request.method=='POST' else None,initial=initial)
-    if request.method=='POST':
+    from .lot_pricing import LotPriceForm, company_vat_rate, price_entry_data
+    from .models import UserLotPrice
+    supplied_price_form = price_form is not None
+    if price_form is None and request.method == 'POST' and price_entry_data(lot) and 'unit_gross' in request.POST:
+        price_form=LotPriceForm(request.POST,lot=lot,initial={'vat_rate':company_vat_rate(request.user,company=company)})
+    form=PreparationForm(request.POST if request.method=='POST' and not supplied_price_form else None,initial=initial)
+    if request.method=='POST' and not supplied_price_form:
         if not editable:
             raise PermissionDenied
-        if form.is_valid():
+        if form.is_valid() and (price_form is None or price_form.is_valid()):
             with transaction.atomic():
                 company=CompanySettings.objects.select_for_update().filter(owner=request.user).first()
                 list(SearchProfile.objects.select_for_update().filter(owner=request.user).order_by('pk'))
                 current=UserLotWorkflow.objects.select_for_update().get(pk=workflow.pk)
-                if current.stage!='interesting':
+                if DraftQueueItem.objects.filter(owner=request.user,lot=lot,state__in=('running','waiting')).exists():
+                    raise PermissionDenied('Сначала остановите заполнение в расширении.')
+                if current.stage != 'preparing' or UserLotPrice.objects.select_for_update().filter(owner=request.user,lot=lot,locked_at__isnull=False).exists():
                     raise PermissionDenied
                 if not company or not company.company_bin:
                     form.add_error(None,'Сначала укажите БИН организации в настройках.')
                 else:
+                    if price_form is not None and price_form.cleaned_data['vat_rate'] != company_vat_rate(request.user,company=company):
+                        raise PermissionDenied('Настройка НДС изменилась. Обновите страницу.')
                     data=dict(form.cleaned_data)
                     data.update({key:getattr(company,key,'') for key in ('company_name','bank_name','bank_bic')})
+                    if data['legal_address'] == company.legal_address and company.address_city and company.address_street and company.address_house:
+                        data['address_parts']={key:getattr(company,'address_'+key) for key in ('city','street','house','office')}
+                    if price_form is not None:
+                        UserLotPrice.objects.update_or_create(owner=request.user,lot=lot,defaults={'unit_gross':price_form.cleaned_data['unit_gross'],'vat_rate':price_form.cleaned_data['vat_rate'],'locked_at':None})
+                        data['price_confirmation']={'unit_gross':str(price_form.cleaned_data['unit_gross']),'vat_rate':str(price_form.cleaned_data['vat_rate']),'discount_confirmed':price_form.cleaned_data['confirm_discount'],'budget_total':str(price_form.budget['total']),'checked_at':timezone.now().isoformat()}
                     defaults={'company_bin':company.company_bin,'data':data}
                     if saved and saved.company_bin!=company.company_bin:
                         defaults.update(portal_state='unconfirmed',portal_number='',portal_url='',portal_checked_at=None,portal_confirmed_at=None,portal_sync_error='',portal_description_saved_at=None)
                     ApplicationPreparation.objects.update_or_create(owner=request.user,lot=lot,
                         defaults=defaults)
-                    messages.success(request,'Данные сохранены в приложении.')
+                    messages.success(request,'Подготовка сохранена. Заявка ещё не подана.')
                     return redirect('application_preparation',lot_id=lot.pk)
     if not editable:
         for field in form.fields.values():
             field.disabled=True
     export_supported=supports_preparation_export(lot)
-    response=render(request,'core/application_preparation.html',{'lot':lot,'form':form,'preparation':saved,
+    from .lot_pricing import pricing_context
+    price_context=pricing_context(request.user,lot,price_form,company=company)
+    if not editable and price_context.get('price_form'):
+        price_context['price_editable']=False
+        for field in price_context['price_form'].fields.values():field.disabled=True
+    response=render(request,'core/application_preparation.html',{'lot':lot,'form':form,'preparation':saved,**price_context,
         'export_supported':export_supported,
         'draft_registry_positions':draft_position_count(lot) if export_supported and editable else None,
-        'company_bin':company_bin,'editable':editable,'bin_changed':bool(saved and saved.company_bin!=company_bin)})
+        'company_bin':company_bin,'preparation_busy':preparation_busy,'editable':editable,'bin_changed':bool(saved and saved.company_bin!=company_bin)})
     response['Cache-Control']='no-store, private'
     return response
 
 
 def preparation_export_data(owner, lot_id):
     saved=get_object_or_404(ApplicationPreparation.objects.select_related('lot__announcement'),owner=owner,lot_id=lot_id)
-    get_object_or_404(UserLotWorkflow,owner=owner,lot_id=lot_id,stage='interesting')
+    get_object_or_404(UserLotWorkflow,owner=owner,lot_id=lot_id,stage__in=('interesting','preparing'))
     company=CompanySettings.objects.filter(owner=owner).first()
+    return export_saved_preparation(saved,company)
+
+
+def export_saved_preparation(saved,company):
+    """Serialize an already owner-scoped preparation after the workflow gate."""
     if not company or not company.company_bin or company.company_bin!=saved.company_bin:
         raise PermissionDenied('Проверьте и сохраните реквизиты после смены БИН.')
     lot=saved.lot
@@ -147,7 +172,7 @@ def preparation_export_data(owner, lot_id):
         'existing_application_number':saved.portal_number if saved.portal_state in ('draft','submitted','completed') else '',
         'announcement_external_id':str(lot.announcement.external_id),'announcement_number':lot.announcement.number,
         'lot_number':lot.number,'data':{'taxpayer_type':company.taxpayer_type,
-            **{k:v for k,v in saved.data.items() if k!='notes'}, 'country':country}}
+            **{k:v for k,v in saved.data.items() if k not in ('notes','price_confirmation')}, 'country':country, 'taxpayer_type':saved.data.get('taxpayer_type') or company.taxpayer_type}}
 
 
 @login_required
@@ -210,7 +235,7 @@ def save_portal_report(owner, lot_id, report, *, allow_create=False):
             saved.portal_sync_error=''
             if report.get('description_saved'):
                 saved.portal_description_saved_at=observed
-            if state=='submitted' and workflow and workflow.stage in ('new','interesting','not_participated','applied'):
+            if state=='submitted' and workflow and workflow.stage in ('new','interesting','preparing','not_participated','applied'):
                 from .workflow_state import update_workflow
                 from .outcome_service import register_watch
                 from .models import UserLotPrice
@@ -220,6 +245,8 @@ def save_portal_report(owner, lot_id, report, *, allow_create=False):
                 update_workflow(owner.pk,lot_id,stage='applied',outcome='',result_tracking=True,
                     expired_from_stage='',keep_after_deadline=False)
                 register_watch(owner.pk,lot_id)
+                from .workflow_notifications import queue_event
+                queue_event(owner.pk,saved.lot,company.company_bin,'submitted',report['number'])
         elif state=='unknown':
             saved.portal_sync_error='Не удалось подтвердить текущее состояние. Сохранено последнее подтверждение.'
         else:

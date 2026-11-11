@@ -5,8 +5,8 @@ from django.db import transaction
 from .models import CollectionLot, Favorite, AnnouncementWatch, SearchProfile, Lot, UserLotWorkflow
 from django.utils import timezone
 
-FAVORITE_STAGES = ('interesting', 'applied', 'contract', 'delivery', 'payment', 'won', 'lost')
-WATCH_STAGES = ('interesting', 'applied', 'contract')
+FAVORITE_STAGES = ('interesting', 'preparing', 'applied', 'contract', 'delivery', 'payment', 'won', 'lost')
+WATCH_STAGES = ('interesting', 'preparing', 'applied', 'contract')
 LOCKED_STAGES = ('applied', 'contract', 'delivery', 'payment', 'won', 'lost', 'archived')
 syncing = ContextVar('workflow_state_syncing', default=False)
 WORK_FIELDS = ('stage', 'outcome', 'expired_from_stage', 'result_tracking')
@@ -94,6 +94,9 @@ def sync_lot(owner_id, lot_id):
             if not lot:
                 return
             stages = CollectionLot.objects.filter(profile__owner_id=owner_id, lot_id=lot_id)
+            if stages.exists() and not stages.exclude(stage__in=('not_participated','archived')).exists():
+                from .models import TelegramDelivery
+                TelegramDelivery.objects.filter(owner_id=owner_id,lot_id=lot_id,state='pending').update(state='cancelled')
             if stages.filter(stage__in=FAVORITE_STAGES).exists():
                 Favorite.objects.get_or_create(owner_id=owner_id, lot_id=lot_id)
             else:
@@ -130,7 +133,7 @@ def add_to_interesting(owner_id, lot_id):
         if not records.exists():
             profile = manual_profile(owner_id)
             CollectionLot.objects.create(profile=profile, lot_id=lot_id, stage='interesting')
-        if not records.filter(stage__in=LOCKED_STAGES).exists():
+        if not records.filter(stage__in=(*LOCKED_STAGES, 'preparing')).exists():
             deadline = Lot.objects.get(pk=lot_id).announcement.deadline
             update_workflow(owner_id, lot_id, stage='interesting', expired_from_stage='',
                 outcome='', result_tracking=False, keep_after_deadline=bool(deadline and deadline <= timezone.now()))
@@ -141,7 +144,7 @@ def remove_from_work(owner_id, lot_id):
     with transaction.atomic():
         list(SearchProfile.objects.select_for_update().filter(owner_id=owner_id).order_by('pk'))
         records = CollectionLot.objects.filter(profile__owner_id=owner_id, lot_id=lot_id)
-        if records.filter(stage__in=LOCKED_STAGES).exists():
+        if records.filter(stage__in=(*LOCKED_STAGES, 'preparing')).exists():
             return False
         update_workflow(owner_id, lot_id, stage='not_participated', expired_from_stage='',
             outcome='', result_tracking=False, keep_after_deadline=False)

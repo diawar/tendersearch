@@ -87,6 +87,9 @@ def probe(original):
                 patch.object(index_service, 'match_lot', measurements.timed('text_matching', index_service.match_lot)), \
                 patch.object(index_service, 'store_lot', measurements.timed('save_lots', index_service.store_lot)), \
                 patch.object(hit_manager, 'get_or_create', measurements.timed('save_hits', hit_manager.get_or_create)):
+            from tender_search.core import technical_documents
+            stack.enter_context(patch.object(technical_documents, 'matching_lots',
+                measurements.timed('document_matching', technical_documents.matching_lots)))
             if batch_store:
                 stack.enter_context(patch.object(index_service, 'store_search_hits', measurements.timed('save_batches', batch_store)))
             index_service.execute_local_search(job.pk)

@@ -140,6 +140,15 @@ services:
     restart: unless-stopped
     mem_limit: 384m
 
+  coverage-monitor:
+    <<: *app
+    command: [python, manage.py, refresh_coverage]
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    mem_limit: 192m
+
   telegram:
     <<: *app
     command: [python, manage.py, telegram_monitor]

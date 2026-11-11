@@ -15,7 +15,7 @@ function setup({installed=true,origin='http://localhost:8000',path='/lots/27723/
   chrome:{runtime:{id:'abcdefghijklmnopabcdefghijklmnop',sendMessage:async message=>{sent.push(message);return {prepared:true,opened:true};}}},
   fetch:async(url,options)=>{fetches.push({url,options});return {ok:true,redirected:false,headers:{get:()=> 'application/json'},json:async()=>structuredClone(packet)};}};
  vm.createContext(context);
- if(installed)vm.runInContext(bridgeSource,context);
+ if(installed){vm.runInContext(bridgeSource,context);vm.runInContext(bridgeSource,context);}
  if(page)vm.runInContext(pageSource,context);
  return {nodes,sent,fetches,window,handlers};
 }
@@ -23,7 +23,7 @@ function setup({installed=true,origin='http://localhost:8000',path='/lots/27723/
  const app=setup(),button=app.nodes['#prepare-with-extension'];
  const first=button.listeners.click();await button.listeners.click();await first;
  assert.equal(app.sent.length,1);assert.equal(app.fetches.length,1);
- assert.equal(app.sent[0].type,'bridge:prepare');assert.equal(app.sent[0].packet.repeat_product,true);
+ assert.equal(app.sent[0].type,'bridge:prepare');assert.equal(app.sent[0].packet.repeat_product,undefined);
  assert.equal(app.fetches[0].url,'http://localhost:8000/lots/27723/preparation/export/');
  assert.equal(app.fetches[0].options.credentials,'same-origin');
  assert.match(app.nodes['#preparation-bridge-result'].textContent,/Данные переданы/);

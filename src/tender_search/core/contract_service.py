@@ -94,13 +94,20 @@ def check_contract(watch_id, lease):
             active.checked_at = timezone.now(); active.next_check_at = active.checked_at+timedelta(hours=1)
             active.save()
             target = result['state']
+            from .models import LotShipment
+            if target in ('payment', 'paid') and not LotShipment.objects.filter(owner_id=current.owner_id, lot_id=current.lot_id).exclude(act='').exists():
+                target = 'delivery'
             if target == 'paid':
-                from .fulfillment import advance
+                from .fulfillment import complete_payment
                 # All exact subjects executed and paid: recorded evidence permits skipping elapsed stages.
                 if current.stage != 'payment':
                     update_workflow(current.owner_id,current.lot_id,stage='payment',result_tracking=True)
-                advance(current.owner_id,current.lot_id,'paid')
+                complete_payment(current.owner_id,current.lot_id)
             elif target in ORDER and ORDER[target] > ORDER[current.stage]:
                 update_workflow(current.owner_id,current.lot_id,stage=target,result_tracking=True)
+                if target == 'delivery' and result['state'] == 'delivery':
+                    from .workflow_notifications import queue_event
+                    queue_event(current.owner_id,current.lot,company_bin,'signed',
+                        result.get('contract_id') or result.get('number'),result.get('number'))
     finally:
         ContractWatch.objects.filter(pk=watch_id,lease=lease).update(lease='',lease_until=None)

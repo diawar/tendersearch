@@ -12,14 +12,14 @@ from .source import source_client
 from .outcome_source import OutcomePortal, Outcome, ProtocolFormatError
 from .telegram_service import telegram_api, TelegramError
 
-TRACKED_STAGES = ('interesting','applied','won','lost','contract','delivery','payment')
+TRACKED_STAGES = ('interesting','preparing','applied','won','lost','contract','delivery','payment')
 
 
 def enroll_participation_checks():
     from .models import UserLotWorkflow
     from .workflow_state import update_workflow
     now=timezone.now()
-    reopened=UserLotWorkflow.objects.filter(owner__is_active=True,stage='interesting',result_tracking=True,
+    reopened=UserLotWorkflow.objects.filter(owner__is_active=True,stage__in=('interesting','preparing'),result_tracking=True,
         lot__announcement__deadline__gt=now)
     for pk in list(reopened.values_list('pk',flat=True)[:200]):
         with transaction.atomic():
@@ -32,7 +32,7 @@ def enroll_participation_checks():
             from .fulfillment import pause_outcome
             pause_outcome(state.owner_id,state.lot_id)
     candidates=UserLotWorkflow.objects.filter(owner__is_active=True).filter(
-        Q(stage='interesting',result_tracking=False,lot__announcement__deadline__lte=now) |
+        Q(stage__in=('interesting','preparing'),result_tracking=False,lot__announcement__deadline__lte=now) |
         Q(stage='not_participated',expired_from_stage='interesting',lot__announcement__deadline__lte=now))
     for pk in list(candidates.values_list('pk',flat=True)[:200]):
         with transaction.atomic():
@@ -41,7 +41,7 @@ def enroll_participation_checks():
             list(SearchProfile.objects.select_for_update().filter(owner_id=state.owner_id).order_by('pk'))
             state=candidates.select_for_update().filter(pk=pk).first()
             if not state:continue
-            update_workflow(state.owner_id,state.lot_id,stage='interesting',expired_from_stage='',result_tracking=True)
+            update_workflow(state.owner_id,state.lot_id,stage=state.stage if state.stage=='preparing' else 'interesting',expired_from_stage='',result_tracking=True)
             register_watch(state.owner_id,state.lot_id)
 
 
@@ -124,18 +124,25 @@ def supported_source(lot):
         system=raw.get('system')
         for value in (raw.get('system_id'),system.get('id') if isinstance(system,dict) else system):
             if value is not None and value!='':ids.add(str(value))
-    return ids=={'1'}
+    if ids == {'1'}:
+        return True
+    # Observed unified API: legacy EGZ lots (system 1) have EPZ (4) on
+    # their announcement. The public protocol still has to bind both exact numbers.
+    raw = lot.raw or {}
+    lot_system = raw.get('system_id') or (raw.get('system') or {}).get('id')
+    return (ids == {'1', '4'} and str(lot_system) == '1'
+            and str(lot.announcement.external_id) == lot.announcement.number.split('-')[0])
 
 
 def outcome_payload(watch):
     titles={'won':'🏆 Выиграли тендер','lost':'📄 Итоги: победил другой поставщик','review':'🔎 Итоги требуют повторной проверки',
-            'not_listed':'🔎 Проверьте подачу заявки','cancelled':'🚫 Закупка отменена','unsuccessful':'📄 Закупка не состоялась'}
+              'not_listed':'📄 Не участвовали','cancelled':'🚫 Закупка отменена','unsuccessful':'📄 Закупка не состоялась'}
     esc=lambda value:escape(str(value or ''))
     names=list(tracked_items(watch.owner_id,watch.lot_id).values_list('profile__name',flat=True).distinct())
     text=f'{titles.get(watch.state,"📄 Итоги закупки")}\n\n<b>{esc(watch.lot.name[:600])}</b>\nЛот: <code>{esc(watch.lot.number)}</code>\nБИН компании: <code>{esc(watch.company_bin)}</code>'
     if names:text+='\n📂 '+esc(' · '.join(names)[:300])
     if watch.winner_bin:text+=f'\n\nПобедитель: {esc(watch.winner_name[:400])}\nБИН: <code>{esc(watch.winner_bin)}</code>'
-    if watch.state=='not_listed':text+='\n\nВ протоколе нужного лота ваш БИН не найден. Сохранение цены в приложении не означает подачу заявки на портале.'
+    if watch.state=='not_listed':text+='\n\nПолнота списка участников подтверждена. Наш БИН не найден. Лот перенесён в «Не участвовали».'
     elif watch.state=='review':text+='\n\nРанее подтверждённый результат нельзя считать актуальным. Требуется повторная проверка протокола.'
     text+='\n\nРезультат проверен по опубликованному протоколу нужного лота.' if watch.state in ('won','lost') else ''
     buttons=[[{'text':'Открыть закупку ↗','url':watch.lot.portal_url}]]
@@ -169,7 +176,7 @@ def check_outcome(watch_id, lease):
             current=LotOutcomeWatch.objects.select_for_update().filter(pk=watch_id,enabled=True,lease=lease,generation=snapshot.generation).select_related('lot__announcement').first()
             if not current or not items:return
             from .models import Announcement
-            if any(item.stage=='interesting' for item in items) and Announcement.objects.filter(
+            if any(item.stage in ('interesting','preparing') for item in items) and Announcement.objects.filter(
                     pk=current.lot.announcement_id,deadline__gt=timezone.now()).exists():
                 return  # Acceptance reopened while the protocol request was running.
             old_state=current.state
@@ -187,7 +194,7 @@ def check_outcome(watch_id, lease):
                         item.outcome=result.state if result.state in ('won','lost') else ''
                         item.save(update_fields=['outcome','updated_at'])
                         continue
-                    if result.state in ('cancelled','unsuccessful') and item.stage=='interesting':
+                    if result.state in ('cancelled','unsuccessful') and item.stage in ('interesting','preparing'):
                         continue
                     item.stage='contract' if result.state == 'won' else ('lost' if result.state == 'lost' else ('not_participated' if result.state=='not_listed' else 'applied'));item.outcome=result.state if result.state in ('won','lost') else ''
                     if result.state=='not_listed':item.result_tracking=False
@@ -198,10 +205,15 @@ def check_outcome(watch_id, lease):
                         item.stage='applied';item.outcome='';item.save(update_fields=['stage','outcome','updated_at'])
                     elif item.stage in ('contract','delivery','payment'):
                         item.outcome='';item.save(update_fields=['outcome','updated_at'])
+            if result.state=='not_listed' and not tracked_items(current.owner_id,current.lot_id).exists():
+                current.enabled=False
+                current.next_check_at=None
+                current.save(update_fields=['enabled','next_check_at','updated_at'])
             if changed and (result.state in ('won','lost','not_listed','cancelled','unsuccessful') or old_state in ('won','lost')):
                 OutcomeDelivery.objects.filter(watch=current,state='pending').update(state='cancelled')
                 OutcomeDelivery.objects.get_or_create(event_key=f'{current.pk}:{current.generation}:{current.revision}',
-                    defaults={'watch':current,'generation':current.generation,'revision':current.revision,'payload':outcome_payload(current)})
+                    defaults={'watch':current,'generation':current.generation,'revision':current.revision,'payload':outcome_payload(current),
+                        'state':'pending' if TelegramSubscription.objects.filter(owner_id=current.owner_id,enabled=True,chat_id__isnull=False).exists() else 'cancelled'})
     except Exception as exc:
         LotOutcomeWatch.objects.filter(pk=watch_id,lease=lease).update(error=str(exc)[:300] if isinstance(exc,SourceError) else 'Не удалось проверить итоги. Повторим позже.',next_check_at=timezone.now()+timedelta(hours=1))
     finally:
@@ -209,15 +221,22 @@ def check_outcome(watch_id, lease):
 
 
 def deliver_outcomes():
+    from django.conf import settings
+    if not settings.TELEGRAM_BOT_TOKEN:return
     now=timezone.now()
     OutcomeDelivery.objects.filter(state='sending',updated_at__lt=now-timedelta(minutes=5)).update(state='uncertain',error='Отправка не подтверждена; повтор отключён.')
     deliveries=OutcomeDelivery.objects.filter(state='pending',watch__owner__is_active=True).filter(Q(retry_at__isnull=True)|Q(retry_at__lte=now)).select_related('watch')
     for delivery in deliveries[:20]:
         watch=delivery.watch
-        if not watch.enabled or watch.generation!=delivery.generation or watch.revision!=delivery.revision or not tracked_items(watch.owner_id,watch.lot_id).exists():
+        terminal_absence = watch.state=='not_listed' and CollectionLot.objects.filter(
+            profile__owner_id=watch.owner_id,lot_id=watch.lot_id,stage='not_participated',result_tracking=False).exists()
+        if watch.generation!=delivery.generation or watch.revision!=delivery.revision or not (
+                terminal_absence or (watch.enabled and tracked_items(watch.owner_id,watch.lot_id).exists())):
             OutcomeDelivery.objects.filter(pk=delivery.pk).update(state='cancelled');continue
         subscription=TelegramSubscription.objects.filter(owner_id=watch.owner_id,enabled=True,chat_id__isnull=False).first()
-        if not subscription:continue
+        if not subscription:
+            OutcomeDelivery.objects.filter(pk=delivery.pk,state='pending').update(state='cancelled')
+            continue
         if not OutcomeDelivery.objects.filter(pk=delivery.pk,state='pending').update(state='sending',updated_at=timezone.now()):continue
         try:
             result=telegram_api('sendMessage',dict(delivery.payload,chat_id=subscription.chat_id))
@@ -225,7 +244,10 @@ def deliver_outcomes():
         except TelegramError as exc:
             if exc.code==429:
                 OutcomeDelivery.objects.filter(pk=delivery.pk).update(state='pending',retry_at=now+timedelta(seconds=max(1,exc.retry_after)),error='Лимит Telegram.');return
-            if exc.code==403:TelegramSubscription.objects.filter(pk=subscription.pk).update(enabled=False)
+            if exc.code==403:
+                TelegramSubscription.objects.filter(pk=subscription.pk).update(enabled=False)
+                from .workflow_notifications import cancel_pending
+                cancel_pending(watch.owner_id)
             OutcomeDelivery.objects.filter(pk=delivery.pk).update(state='uncertain' if exc.code==0 else 'error',error=f'Telegram: {exc.code}')
 
 
@@ -253,32 +275,3 @@ def move_closed_unsubmitted():
     # A genuinely extended deadline starts a new acceptance period.
     records.filter(keep_after_deadline=True,lot__announcement__deadline__gt=now).update(keep_after_deadline=False)
     reconcile_workflow_states()
-
-
-def cancel_application(owner, lot):
-    """Undo the app's test submission mark; never contact the procurement portal."""
-    with transaction.atomic():
-        list(SearchProfile.objects.select_for_update().filter(owner=owner).order_by('pk'))
-        from .models import ApplicationPreparation
-        if ApplicationPreparation.objects.filter(owner=owner,lot=lot,portal_state__in=('submitted','completed')).exists():
-            raise ValueError('Подача подтверждена порталом. Тестовая отмена отметки недоступна.')
-        items=list(CollectionLot.objects.select_for_update().filter(profile__owner=owner,lot=lot))
-        applied=[item for item in items if item.stage=='applied']
-        price=UserLotPrice.objects.select_for_update().filter(owner=owner,lot=lot).first()
-        if not applied or not price or not price.locked_at:
-            raise ValueError('Нет отметки о подаче для отмены.')
-        if any(item.stage in ('won','lost','contract','delivery','payment') for item in items):
-            raise ValueError('Лот уже перешёл к итогам или исполнению.')
-        watch=LotOutcomeWatch.objects.select_for_update().filter(owner=owner,lot=lot).first()
-        if watch:
-            watch.enabled=False;watch.generation=secrets.token_hex(16)
-            watch.lease='';watch.lease_until=None;watch.next_check_at=None
-            watch.state='pending';watch.winner_bin='';watch.winner_name=''
-            watch.protocol_url='';watch.fingerprint='';watch.checked_at=None;watch.error=''
-            watch.save()
-            OutcomeDelivery.objects.filter(watch=watch,state='pending').update(state='cancelled')
-        price.locked_at=None;price.save(update_fields=['locked_at','updated_at'])
-        from .workflow_state import update_workflow
-        deadline=lot.announcement.deadline
-        update_workflow(owner.pk,lot.pk,stage='interesting',outcome='',result_tracking=False,
-            expired_from_stage='',keep_after_deadline=bool(deadline and deadline <= timezone.now()))

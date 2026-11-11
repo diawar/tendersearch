@@ -9,6 +9,8 @@ from .models import DraftQueueItem, ApplicationPreparation, UserLotWorkflow
 class DraftQueueTests(TestCase):
     def setUp(self):
         test_extension_transfer.ExtensionTransferTests.setUp(self)
+        from .models import CompanySettings
+        CompanySettings.objects.filter(owner=self.owner).update(taxpayer_type='Юридическое лицо')
         self.lot.raw={'system_id':1,'purchase_method_id':12,'_pricing_detail':{
             'id':self.lot.source_id,'is_combined':False,'plan_items':[{'id':1,'purchase_method':{'id':12}}]}}
         self.lot.save()
@@ -29,16 +31,16 @@ class DraftQueueTests(TestCase):
         p=ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot)
         self.assertEqual(p.portal_state,'unconfirmed')
         self.assertContains(self.client.get('/workspace/drafts/'),'Ожидает')
-        self.assertContains(self.client.get('/workspace/?stage=interesting'),'form="queue-add"')
-        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'interesting')
+        self.assertContains(self.client.get('/workspace/drafts/'),'Подготовка заявки')
+        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'preparing')
 
-    def test_packet_uses_latest_preparation_and_requires_per_lot_consent(self):
+    def test_packet_registry_rows_do_not_require_repeat_consent(self):
         response=self.client.post(self.base+'packet/')
         self.assertEqual(response.status_code,200)
         self.assertEqual(response.json()['queue_context']['generation'],str(self.item.generation))
-        self.assertFalse(response.json()['packet']['repeat_product'])
+        self.assertNotIn('repeat_product',response.json()['packet'])
         self.lot.raw['_pricing_detail']['plan_items'].append({'id':2,'purchase_method':{'id':12}});self.lot.save()
-        self.assertEqual(self.client.post(self.base+'packet/').status_code,400)
+        self.assertEqual(self.client.post(self.base+'packet/').status_code,200)
         self.assertEqual(self.client.post(self.base+'packet/',{'repeat_product':'on'}).status_code,200)
         UserLotWorkflow.objects.filter(owner=self.owner,lot=self.lot).update(stage='applied')
         self.assertEqual(self.client.post(self.base+'packet/',{'repeat_product':'on'}).status_code,400)
@@ -50,7 +52,7 @@ class DraftQueueTests(TestCase):
         self.item.refresh_from_db();self.assertEqual(self.item.state,'complete')
         p=ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot)
         self.assertEqual(p.portal_number,'123');self.assertIsNotNone(p.portal_description_saved_at)
-        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'interesting')
+        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'preparing')
         self.assertEqual(self.post_progress(status='running').status_code,400)
 
     def test_progress_cannot_confirm_wrong_lot_or_partial_description(self):
@@ -87,7 +89,7 @@ class DraftQueueTests(TestCase):
         p=ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot)
         self.assertEqual(p.portal_number,'123');self.assertIsNone(p.portal_description_saved_at)
         self.item.refresh_from_db();self.assertEqual(self.item.state,'blocked')
-        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'interesting')
+        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'preparing')
 
     def test_malformed_progress_and_stale_generation_are_rejected(self):
         for payload in ([],{'snapshot':None},{'snapshot':{},'generation':'old'}):
@@ -100,3 +102,63 @@ class DraftQueueTests(TestCase):
         CompanySettings.objects.filter(owner=self.owner).update(company_bin='123456789012')
         self.assertEqual(self.post_progress(company_bin='123456789012',observed_at=observed).status_code,400)
 
+
+    def test_waiting_for_recovery_keeps_queue_and_can_be_stopped(self):
+        response=self.post_progress(status='waiting',number='',lotConfirmed=False,description_saved=False,message='Ожидание восстановления')
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.json()['label'],'Ожидание восстановления')
+        self.client.post(self.base+'cancel/')
+        self.item.refresh_from_db();self.assertEqual(self.item.state,'waiting')
+        self.assertEqual(self.post_progress(status='paused',number='',lotConfirmed=False,description_saved=False).status_code,200)
+        self.client.post(self.base+'cancel/')
+        self.item.refresh_from_db();self.assertEqual(self.item.state,'cancelled')
+
+    def test_portal_check_is_personal_and_does_not_reset_or_create(self):
+        self.assertEqual(self.post_progress().status_code,200)
+        url=self.base+'check/'
+        prepared=self.client.post(url).json()
+        target=prepared['target']
+        self.assertEqual(target['number'],'123')
+        result={**target,'check_state':'absent','observed_at':timezone.now().isoformat(),'message':'Нет заявок'}
+        response=self.client.post(url,json.dumps({'generation':prepared['generation'],'result':result}),content_type='application/json')
+        self.assertEqual(response.status_code,200)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.state,'complete')
+        self.assertEqual(self.item.portal_check['state'],'absent')
+        self.assertEqual(ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot).portal_number,'123')
+        result['number']='999'
+        self.assertEqual(self.client.post(url,json.dumps({'generation':prepared['generation'],'result':result}),content_type='application/json').status_code,400)
+        self.client.logout()
+        self.assertEqual(self.client.post(url).status_code,302)
+
+    def test_restart_requires_recent_absence_and_preserves_preparation(self):
+        self.assertEqual(self.post_progress().status_code,200)
+        old_generation=str(self.item.generation)
+        self.client.post(self.base+'restart/',{'generation':old_generation})
+        self.item.refresh_from_db();self.assertEqual(self.item.state,'complete')
+        self.item.portal_check={'state':'absent','number':'123','checked_at':timezone.now().isoformat()};self.item.save()
+        before=ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot).data
+        self.client.post(self.base+'restart/',{'generation':old_generation})
+        self.item.refresh_from_db();self.assertEqual(self.item.state,'queued')
+        self.assertNotEqual(str(self.item.generation),old_generation)
+        prep=ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot)
+        self.assertEqual(prep.data,before);self.assertEqual(prep.portal_number,'')
+        packet=self.client.post(self.base+'packet/').json()['packet']
+        self.assertEqual(packet['reset_absent_application'],'123')
+        self.assertEqual(packet['existing_application_number'],'')
+        self.assertEqual(self.post_progress().status_code,200)
+        self.assertNotIn('reset_absent_application',self.client.post(self.base+'packet/').json().get('packet',{}))
+
+    def test_expired_queue_is_removed_without_moving_workflow_or_deleting_preparation(self):
+        from datetime import timedelta
+        self.lot.announcement.deadline=timezone.now()-timedelta(seconds=1)
+        self.lot.announcement.save()
+        old_generation=self.item.generation
+        response=self.client.post(self.base+'packet/')
+        self.assertTrue(response.json()['skipped'])
+        self.item.refresh_from_db();self.assertEqual(self.item.state,'cancelled')
+        self.assertNotEqual(self.item.generation,old_generation)
+        self.assertTrue(ApplicationPreparation.objects.filter(owner=self.owner,lot=self.lot).exists())
+        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'preparing')
+        self.client.post('/workspace/drafts/add/',{'lots':[str(self.lot.pk)]})
+        self.item.refresh_from_db();self.assertEqual(self.item.state,'cancelled')

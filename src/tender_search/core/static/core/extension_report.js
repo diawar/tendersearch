@@ -8,7 +8,7 @@
  try{
   if(!fragment||fragment.length>36000)throw Error();
   report=JSON.parse(decodeURIComponent(fragment));
-  if(!report||report.schema!=='goszakup-status-v1')throw Error();
+  if(!report||!['goszakup-status-v1','goszakup-restriction-v1'].includes(report.schema))throw Error();
  }catch{
   message.textContent='Отчёт не получен. Войдите в приложение, вернитесь в расширение и нажмите «Передать в приложение».';
   return;
@@ -27,6 +27,7 @@
     (data.description_saved?' · Описание товара заполнено':'')+
     (report.state==='submitted'&&data.stage==='applied'?'. Этап: «Подали заявку». Проверка итогов включена.':'')+
     (report.state==='unknown'?'. Текущее состояние не подтверждено; сохранено последнее подтверждение.':'');
+   if(report.schema==='goszakup-restriction-v1')message.textContent='Сохранено для лота '+report.lot_number+': изъятие из национального режима — '+(data.national_withdrawn?'Да':'Нет')+'. Этап работы и статус заявки не изменены.';
    document.querySelector('#transfer-lot').href=data.lot_url;
    document.querySelector('#transfer-preparation').href=data.preparation_url;
    document.querySelector('#transfer-links').hidden=false;
@@ -40,5 +41,9 @@
   (report.description_saved===true?' · Описание товара заполнено':'')+
   (report.state==='submitted'?'. После сохранения лот перейдёт в «Подали заявку», если работа ещё не продвинулась дальше.':'')+'. Проверьте аккаунт и подтвердите сохранение.';
  retry.textContent='Сохранить статус в этом аккаунте';retry.hidden=false;
+ if(report.schema==='goszakup-restriction-v1'){
+  message.textContent='Лот '+report.lot_number+' · Изъятие из национального режима: '+(report.national_withdrawn?'Да':'Нет')+'. Подтвердите сохранение результата в приложении.';
+  retry.textContent='Сохранить признак лота';
+ }
  retry.addEventListener('click',send);
 })();

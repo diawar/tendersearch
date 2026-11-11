@@ -93,3 +93,15 @@ def test_all_lot_pages_and_repeated_page_detection():
         assert api.html.call_args_list[1].kwargs['params']['page'] == 2
         api.html = Mock(side_effect=[first,first])
         with pytest.raises(SchemaError, match='повторил'): api.announcement_lots(2021878)
+
+
+def test_healthcare_lot_columns():
+    card = parse_card(fixture('fms.ecc.kz-card.html'), 525724, 'fms_ecc')
+    rows = parse_lots(fixture('fms-healthcare-lots.html'), card)
+    assert len(rows) == 1
+    assert rows[0]['id'] == 4828503
+    assert rows[0]['lot_number'] == '4804891-Зму3'
+    assert rows[0]['name_ru'] == 'Высокотехнологичная медицинская помощь'
+    assert 'ОСМС' in rows[0]['description_ru']
+    assert rows[0]['total_price'] == '5213445405.26'
+    assert rows[0]['status']['id'] == 7

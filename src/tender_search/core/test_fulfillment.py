@@ -1,4 +1,5 @@
 from unittest.mock import patch
+from django.utils import timezone
 from django.test import TestCase, override_settings
 from .models import (CollectionLot, UserLotWorkflow, UserLotPrice, Favorite, AnnouncementWatch,
     LotOutcomeWatch, OutcomeDelivery, SearchProfile, UserLotNote)
@@ -13,35 +14,56 @@ class FulfillmentTests(TestCase):
     def setUp(self):
         from .test_lot_pricing import LotPricingTests
         LotPricingTests.setUp(self)
-        self.client.post(self.endpoint,{'unit_gross':'116'})
+        update_workflow(self.owner.pk,self.lot.pk,stage='preparing')
+        self.client.post(self.endpoint,{'confirm_discount':'on','unit_gross':'116'})
+        UserLotPrice.objects.filter(owner=self.owner,lot=self.lot).update(locked_at=timezone.now())
         update_workflow(self.owner.pk,self.lot.pk,stage='won',outcome='won',result_tracking=True)
+        from .outcome_service import register_watch
+        register_watch(self.owner.pk,self.lot.pk)
         self.action_url=f'/workspace/lots/{self.lot.pk}/action/'
 
     def state(self):
         return UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot)
 
-    def test_winner_to_paid_archive_preserves_price_and_note_and_stops_checks(self):
-        UserLotNote.objects.create(owner=self.owner,lot=self.lot,text='Договор и поставка')
-        for action,expected in [('contract','contract'),('delivery','delivery'),('payment','payment'),('paid','archived')]:
-            response=self.client.post(self.action_url,{'action':action,'next':'/workspace/?stage=won'})
-            self.assertEqual(response.status_code,302)
-            self.assertEqual(self.state().stage,expected)
-            self.assertTrue(UserLotPrice.objects.get(owner=self.owner,lot=self.lot).locked_at)
+    def test_confirmed_payment_archives_preserving_price_note_and_stopping_checks(self):
+        from .models import LotShipment,ContractWatch
+        from .fulfillment import complete_payment
+        UserLotNote.objects.create(owner=self.owner,lot=self.lot,text='Saved note')
+        state=update_workflow(self.owner.pk,self.lot.pk,stage='payment',outcome='won',result_tracking=True)
+        LotShipment.objects.create(owner=self.owner,lot=self.lot,act='test-act.pdf')
+        with self.assertRaises(ValueError):complete_payment(self.owner.pk,self.lot.pk)
+        ContractWatch.objects.create(workflow=state,state='paid',evidence={'state':'paid'},checked_at=timezone.now())
+        complete_payment(self.owner.pk,self.lot.pk)
+        self.assertEqual(self.state().stage,'archived')
         self.assertTrue(self.state().completed_at)
-        self.assertTrue(self.state().archived_at)
+        self.assertTrue(UserLotPrice.objects.get(owner=self.owner,lot=self.lot).locked_at)
         self.assertFalse(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
         self.assertFalse(AnnouncementWatch.objects.get(owner=self.owner,announcement=self.lot.announcement).enabled)
         self.assertFalse(LotOutcomeWatch.objects.get(owner=self.owner,lot=self.lot).enabled)
-        self.assertEqual(UserLotNote.objects.get(owner=self.owner,lot=self.lot).text,'Договор и поставка')
+        self.assertEqual(UserLotNote.objects.get(owner=self.owner,lot=self.lot).text,'Saved note')
         self.assertEqual(CollectionLot.objects.get(profile__owner=self.other,lot=self.lot).stage,'interesting')
 
-    def test_cannot_skip_steps_or_archive_unfinished_fulfillment(self):
-        for action in ('delivery','payment','paid'):
-            with self.assertRaises(ValueError):advance(self.owner.pk,self.lot.pk,action)
-        advance(self.owner.pk,self.lot.pk,'contract')
-        for action in ('contract','archive','restore','paid'):
-            with self.assertRaises(ValueError):advance(self.owner.pk,self.lot.pk,action)
-        self.assertEqual(self.state().stage,'contract')
+    def test_manual_automatic_transitions_rejected_on_every_stage_and_view(self):
+        from .fulfillment import actions_for
+        from .models import LotShipment
+        LotShipment.objects.create(owner=self.owner,lot=self.lot,act='test-act.pdf',shipped_at=timezone.now(),act_uploaded_at=timezone.now())
+        for stage in ('preparing','applied','won','contract','delivery','payment','lost','not_participated','archived'):
+            state=update_workflow(self.owner.pk,self.lot.pk,stage=stage,outcome='won')
+            self.assertFalse({'contract','delivery','payment','paid'} & {a['value'] for a in actions_for(state)})
+            for action in ('contract','delivery','payment','paid','applied','won','lost'):
+                with self.assertRaises(ValueError):advance(self.owner.pk,self.lot.pk,action)
+                response=self.client.post(self.action_url,{'action':action})
+                self.assertEqual(response.status_code,302)
+                self.assertEqual(self.state().stage,stage)
+        update_workflow(self.owner.pk,self.lot.pk,stage='contract',outcome='won')
+        from .models import ContractWatch
+        ContractWatch.objects.create(workflow=self.state(),state='review',error='Contract needs checking')
+        for url in (f'/lots/{self.lot.pk}/','/workspace/?stage=contract','/favorites/'):
+            with patch('tender_search.core.views.queue_refresh'):
+                page=self.client.get(url)
+            self.assertNotContains(page,'value="delivery"')
+            self.assertNotContains(page,'value="paid"')
+            if 'favorites' not in url:self.assertContains(page,'Contract needs checking')
 
     def test_archive_invalidates_running_outcome_and_pending_delivery(self):
         from .models import TelegramDelivery

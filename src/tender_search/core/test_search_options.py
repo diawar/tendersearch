@@ -48,7 +48,7 @@ class SearchOptionTests(TestCase):
         soup=BeautifulSoup(response.content,'html.parser')
         self.assertEqual([item['value'] for item in soup.select('select[name=per_page] option')],['10','20','50','100'])
         hidden={item['name']:item['value'] for item in soup.select('.page-size-controls input[type=hidden]')}
-        self.assertEqual(hidden,{'sort':'amount','remaining':'2'})
+        self.assertEqual(hidden,{'sort':'amount'})
         self.assertEqual(self.client.get(self.url).context['per_page'],10)
         response=self.client.get('/workspace/',{'per_page':'50','stage':'all','profile':self.profile.pk,'sort':'-amount'})
         self.assertEqual(response.context['page'].paginator.per_page,50)
@@ -58,7 +58,7 @@ class SearchOptionTests(TestCase):
         for size in [10,20,50,100]:
             response=self.client.get(self.url,{'per_page':size})
             self.assertEqual(len(response.context['page']),min(25,size))
-        self.assertContains(self.client.get(self.url),'За единицу:')
+        self.assertContains(self.client.get(self.url),'Количество и цена за единицу не уточнены')
 
     def test_phrase_form_preserves_words_and_searches_only_adjacent_prefixes(self):
         form=SearchForm({'terms':'беспроводн мыш; игров клавиатур','kind':'phrase','mode':'any','number_kind':'lot_number'})

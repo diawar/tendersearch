@@ -11,7 +11,7 @@ import json
 from urllib.parse import urlsplit
 
 
-FILES = ('manifest.json', 'popup.html', 'popup.css', 'popup.js', 'status.js', 'draft.js', 'background.js', 'bridge-config.js', 'bridge.js', 'README.md')
+FILES = ('manifest.json', 'popup.html', 'popup.css', 'popup.js', 'status.js', 'check.js', 'draft.js', 'background.js', 'bridge-config.js', 'bridge.js', 'README.md')
 
 
 @login_required
@@ -63,6 +63,15 @@ def receive_extension_report(request):
                 lot__number=report.get('lot_number')).values_list('lot_id',flat=True)[:2])
             if len(workflows)!=1:
                 raise ValueError('Нужный лот не найден однозначно в вашем рабочем пространстве. Добавьте его туда и повторите передачу.')
+            if report.get('schema') == 'goszakup-restriction-v1':
+                from .restrictions import save_restriction_report
+                lot = save_restriction_report(request.user, workflows[0], report)
+                response = JsonResponse({'saved': True, 'national_withdrawn': lot.national_withdrawn,
+                    'lot_url': reverse('lot_detail', kwargs={'lot_id': lot.pk}),
+                    'preparation_url': reverse('lot_detail', kwargs={'lot_id': lot.pk})})
+                response['Cache-Control'] = 'no-store, private'
+                response['Referrer-Policy'] = 'no-referrer'
+                return response
             saved=save_portal_report(request.user,workflows[0],report,allow_create=True)
             stage=UserLotWorkflow.objects.get(owner=request.user,lot_id=saved.lot_id).stage
             response=JsonResponse({'saved':True,'state':saved.portal_state,'number':saved.portal_number,

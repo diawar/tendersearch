@@ -143,7 +143,7 @@ def parse_lots(html, card, *, check_count=True):
         table = tr.find_parent('table')
         headers = [text(c) for c in table.select('tr')[0].find_all(['th', 'td'], recursive=False)]
         values = dict(zip(headers, (text(c) for c in tr.find_all('td', recursive=False))))
-        name = values.get('Наименование') or values.get('МНН') or values.get('Наименование лота')
+        name = values.get('Наименование') or values.get('МНН') or values.get('Наименование лота') or values.get('Форма/Вид медицинской помощи')
         state_name = values.get('Статус') or values.get('Статус лота')
         if not name or not state_name:
             raise SchemaError('Изменились столбцы медицинского лота')
@@ -155,7 +155,7 @@ def parse_lots(html, card, *, check_count=True):
             'announcement_id': card['id'], 'announcement_number': card['number'],
             'announcement_name_ru': card['name_ru'], '_announcement': card,
             'lot_number': text(link), 'name_ru': name,
-            'description_ru': values.get('Краткая характеристика (описание) предмета закупки', values.get('Лекарственная форма', '')),
+            'description_ru': values.get('Краткая характеристика (описание) предмета закупки', values.get('Лекарственная форма', values.get('Подвиды медицинской помощи', ''))),
             'total_price': money(values.get('Общая сумма закупа (в тенге)', values.get('Сумма', values.get('Общая сумма лота')))),
             'status': status(state_name), 'customers': customers,
             'purchase_method': card['purchase_method'], 'purchase_method_name': card['purchase_method']['name'],

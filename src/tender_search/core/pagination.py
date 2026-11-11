@@ -10,4 +10,4 @@ def page_settings(request,scope):
         size=int(requested)
         if request.session.get(key)!=size:request.session[key]=size
     return {'per_page':size,'page_size_options':PAGE_SIZES,
-        'page_query_items':[(key,value) for key,values in request.GET.lists() if key not in ('page','per_page') for value in values]}
+        'page_query_items':[(key,value) for key,values in request.GET.lists() if key not in ('page','per_page','remaining') for value in values]}

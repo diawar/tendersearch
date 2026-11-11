@@ -46,4 +46,16 @@ def platform_statuses(coverage):
                         heartbeat_at=source.heartbeat_at if source else None,
                         building=bool(source and source.cursor), error=bool(source and source.error), now=now)
         result.append(dict(status, key=key, name=name))
+    from .models import TechnicalIndexProgress
+    progress = TechnicalIndexProgress.objects.first()
+    if progress:
+        c=progress.counts
+        finished=bool(progress.completed_at)
+        label=('Первое заполнение завершено' if finished else 'Первое заполнение')
+        label+=f": {c.get('checked',0) + c.get('retired',0)} / {c.get('total',0)}; с текстом: {c.get('readable',0)}; без техспецификации: {c.get('missing',0)}; ошибок: {c.get('errors',0)}"
+        result.append(dict(key='technical_documents',name='Техспецификации',state='ready' if finished else 'loading',
+            label=label,completed_at=progress.completed_at))
+    else:
+        result.append(dict(key='technical_documents',name='Техспецификации',state='waiting',
+            label='Первое заполнение ещё не началось',completed_at=None))
     return result

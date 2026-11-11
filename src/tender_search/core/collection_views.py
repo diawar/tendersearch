@@ -14,13 +14,13 @@ from .models import SearchProfile, CollectionLot, Favorite, AnnouncementWatch, T
 from .collections_service import enqueue_collection
 from .lot_state import visible_collection_lots
 
-STEPS = [('all', 'Неразобранные лоты'), ('interesting', 'Интересные лоты'), ('applied', 'Подали заявку'),
+STEPS = [('all', 'Неразобранные лоты'), ('interesting', 'Интересные лоты'), ('preparing', 'Подготовка заявки'), ('applied', 'Подали заявку'),
          ('contract', 'Заключение договора'), ('delivery', 'Поставка'), ('payment', 'Оплата'),
          ('won', 'Выиграли'), ('lost', 'Проиграли'), ('not_participated', 'Не участвовали'), ('archived', 'Архив')]
 
 
 @login_required
-def collections(request):
+def collections(request, preparation_stage=False):
     from .pagination import page_settings
     pagination=page_settings(request,'workspace')
     profiles = list(SearchProfile.objects.filter(owner=request.user).order_by('created_at', 'pk'))
@@ -29,7 +29,9 @@ def collections(request):
     if not aggregate and not selected.isdecimal():
         raise Http404
     profile = None if aggregate else get_object_or_404(SearchProfile, pk=selected, owner=request.user)
-    stage = request.GET.get('stage', 'all')
+    stage = 'preparing' if preparation_stage else request.GET.get('stage', 'all')
+    if stage=='preparing' and not preparation_stage:
+        return redirect(reverse('draft_queue')+'?'+urlencode({'profile':selected or 'all'}))
     if stage not in dict(STEPS):
         stage = 'all'
     selected_sort = request.GET.get('sort', '')
@@ -47,53 +49,77 @@ def collections(request):
             records = records.filter(profile=profile)
         all_records = records
         counters = {key: set() for key, label in STEPS}
+        visible_ids = set()
         for identifier, current_stage, outcome in records.values_list('lot_id', 'stage', 'outcome'):
+            if current_stage != 'archived':
+                visible_ids.add(identifier)
             if current_stage == 'new':
                 counters['all'].add(identifier)
             if current_stage in counters and current_stage not in ('won','lost'):
                 counters[current_stage].add(identifier)
             if outcome in ('won','lost'):
                 counters[outcome].add(identifier)
-        records = records.filter(outcome=stage) if stage in ('won','lost') else records.filter(stage='new' if stage == 'all' else stage)
         if aggregate:
-            representatives = records.order_by().values('lot_id').annotate(identifier=Max('pk')).values('identifier')
-            records = records.filter(pk__in=Subquery(representatives))
-        order = ['-last_seen_at', '-pk']
-        if selected_sort:
-            key = selected_sort.lstrip('-')
-            if key == 'start':
-                records = records.annotate(offer_start_sort=Cast(NullIf(KeyTextTransform('offer_start_date', 'lot__raw'), Value('')), DateTimeField()))
-            field = F(sort_fields[key])
-            order.insert(0, field.desc(nulls_last=True) if selected_sort.startswith('-') else field.asc(nulls_last=True))
-        key = selected_sort.lstrip('-')
-        headers = {}
-        for name, label in [('amount', 'Сумма, ₸'), ('start', 'Начало'), ('end', 'Окончание')]:
-            active = key == name
-            descending = selected_sort.startswith('-')
-            target = ('-' if active and not descending else '') + name
-            headers[name] = {'label': label, 'url': '?' + urlencode({'profile': context['collection_key'], 'stage': stage, 'sort': target,'per_page':pagination['per_page']}),
-                'arrow': ('↓' if descending else '↑') if active else '↕', 'aria': ('descending' if descending else 'ascending') if active else 'none'}
-        context['sort_headers'] = headers
-        page = Paginator(records.select_related('lot__announcement', 'lot__customer').order_by(*order), pagination['per_page']).get_page(request.GET.get('page'))
-        from .views import result_context
-        result_context(request, [record.lot for record in page])
-        notes = dict(UserLotNote.objects.filter(owner=request.user,
-            lot_id__in=[record.lot_id for record in page]).values_list('lot_id', 'text'))
-        workflows = {}
-        if aggregate:
-            for item in all_records.filter(lot_id__in=[record.lot_id for record in page]).select_related('profile').order_by('profile__created_at', 'pk'):
-                workflows.setdefault(item.lot_id, []).append(item)
-        outcome_watches = {watch.lot_id: watch for watch in LotOutcomeWatch.objects.filter(owner=request.user, lot_id__in=[record.lot_id for record in page])}
-        prices = {price.lot_id:price for price in UserLotPrice.objects.filter(owner=request.user,lot_id__in=[record.lot_id for record in page])}
-        for record in page:
-            record.saved_price = prices.get(record.lot_id)
-            record.result_watch = outcome_watches.get(record.lot_id)
-            record.note_text = notes.get(record.lot_id, '')
-            record.workflows = workflows.get(record.lot_id, [record])
-            if aggregate:
-                record.terms = list(dict.fromkeys(term for item in record.workflows for term in item.terms))
-        context.update(page=page, steps=[{'key': key, 'label': label, 'count': len(counters[key])} for key, label in STEPS],
+            request._workspace_lot_count = len(visible_ids)
+        context.update(steps=[{'key': key, 'label': label, 'count': len(counters[key])} for key, label in STEPS],
             collection_busy=any(p.collection_lease_until and p.collection_lease_until > timezone.now() for p in ([profile] if profile else profiles)))
+        if stage != 'preparing':
+            records = records.filter(outcome=stage) if stage in ('won','lost') else records.filter(stage='new' if stage == 'all' else stage)
+            if aggregate:
+                representatives = records.order_by().values('lot_id').annotate(identifier=Max('pk')).values('identifier')
+                records = records.filter(pk__in=Subquery(representatives))
+            order = ['-last_seen_at', '-pk']
+            if selected_sort:
+                key = selected_sort.lstrip('-')
+                if key == 'start':
+                    records = records.annotate(offer_start_sort=Cast(NullIf(KeyTextTransform('offer_start_date', 'lot__raw'), Value('')), DateTimeField()))
+                field = F(sort_fields[key])
+                order.insert(0, field.desc(nulls_last=True) if selected_sort.startswith('-') else field.asc(nulls_last=True))
+            key = selected_sort.lstrip('-')
+            headers = {}
+            for name, label in [('amount', 'Сумма, ₸'), ('start', 'Начало'), ('end', 'Окончание')]:
+                active = key == name
+                descending = selected_sort.startswith('-')
+                target = ('-' if active and not descending else '') + name
+                headers[name] = {'label': label, 'url': '?' + urlencode({'profile': context['collection_key'], 'stage': stage, 'sort': target,'per_page':pagination['per_page']}),
+                    'arrow': ('↓' if descending else '↑') if active else '↕', 'aria': ('descending' if descending else 'ascending') if active else 'none'}
+            context['sort_headers'] = headers
+            page = Paginator(records.select_related('lot__announcement', 'lot__customer').order_by(*order), pagination['per_page']).get_page(request.GET.get('page'))
+            from .views import result_context
+            result_context(request, [record.lot for record in page])
+            notes = dict(UserLotNote.objects.filter(owner=request.user,
+                lot_id__in=[record.lot_id for record in page]).values_list('lot_id', 'text'))
+            workflows = {}
+            if aggregate:
+                for item in all_records.filter(lot_id__in=[record.lot_id for record in page]).select_related('profile').order_by('profile__created_at', 'pk'):
+                    workflows.setdefault(item.lot_id, []).append(item)
+            for record in page:
+                record.result_watch = record.lot.personal_outcome_watch
+                record.note_text = notes.get(record.lot_id, '')
+                record.workflows = workflows.get(record.lot_id, [record])
+                if aggregate:
+                    record.terms = list(dict.fromkeys(term for item in record.workflows for term in item.terms))
+            context['page'] = page
+    if stage=='preparing':
+        from .models import DraftQueueItem
+        from .lot_pricing import attach_lot_budgets
+        ids=visible_collection_lots(request.user).filter(stage='preparing')
+        if profile: ids=ids.filter(profile=profile)
+        items=list(DraftQueueItem.objects.filter(owner=request.user,lot_id__in=ids.values('lot_id')).select_related('lot__announcement','lot__customer').order_by('created_at','pk'))
+        attach_lot_budgets([item.lot for item in items])
+        from .draft_readiness import readiness
+        from .models import CompanySettings, ApplicationPreparation, UserLotWorkflow
+        company=CompanySettings.objects.filter(owner=request.user).first()
+        lot_ids=[item.lot_id for item in items]
+        prepared={saved.lot_id:saved for saved in ApplicationPreparation.objects.filter(owner=request.user,lot_id__in=lot_ids)}
+        workflows={workflow.lot_id:workflow for workflow in UserLotWorkflow.objects.filter(owner=request.user,lot_id__in=lot_ids)}
+        for item in items:
+            saved=prepared.get(item.lot_id)
+            item.lot.preparation=saved if saved and company and saved.company_bin==company.company_bin else None
+            item.lot.workflow=workflows.get(item.lot_id)
+            item.availability=readiness(item,company,saved)
+        context['queue_can_run']=any(item.availability['can_start'] for item in items)
+        context['items']=items
     return render(request, 'core/collections.html', context)
 
 
@@ -162,8 +188,14 @@ def move(request, item_id):
             update_workflow(request.user.pk, item.lot_id, stage='not_participated', outcome='',
                 result_tracking=False, expired_from_stage='', keep_after_deadline=False)
         else:
-            messages.error(request,'Этап меняется автоматически. Для подачи используйте кнопку «Подать цену» после ввода цены.')
+            messages.error(request,'Этап меняется автоматически по подтверждённым данным. Для подготовки используйте «Подготовить заявку».')
             destination='all'
+    from django.utils.http import url_has_allowed_host_and_scheme
+    from urllib.parse import urlsplit
+    return_to=request.POST.get('return_to','')
+    if (return_to and url_has_allowed_host_and_scheme(return_to,allowed_hosts={request.get_host()},require_https=request.is_secure())
+            and urlsplit(return_to).path == reverse('workspace')):
+        return redirect(return_to)
     target='all' if request.POST.get('return_scope')=='all' else item.profile_id
     selected_sort=request.POST.get('return_sort','')
     suffix='&sort='+selected_sort if selected_sort in {prefix+key for prefix in ('','-') for key in ('amount','start','end')} else ''

@@ -5,22 +5,22 @@ const packet={schema:'goszakup-preparation-v1',company_bin:'241040001415',announ
  announcement_number:'17920228-1',lot_number:'88537093-ЗЦП1',purchase_method_id:12,single_position:true,
  data:{product_name:'ТЕСТ комплект',manufacturer:'ТЕСТ изготовитель',country:'Китай',legal_address:'Тестовая 1',bank_account:'KZ000000000000000000',contact_phone:'+77000000000'}};
 validateDraftPacket(packet);
-assert.throws(()=>validateDraftPacket({...packet,position_count:2}));
+validateDraftPacket({...packet,position_count:2});
 validateDraftPacket({...packet,position_count:2,repeat_product:true});
 for(const bad of [{purchase_method_id:11},{single_position:false},{announcement_external_id:'99'},
  {company_bin:'invalid'},{data:{...packet.data,manufacturer:''}},{data:{...packet.data,bank_account:'bad'}}])assert.throws(()=>validateDraftPacket({...packet,...bad}));
 function worker(step,local={}){
- let listener,data={},calls=[],opened=[],updates=[],navigationListener;
- const chrome={runtime:{id:'test-extension',getURL:p=>'chrome-extension://test-extension/'+p,onMessage:{addListener:fn=>listener=fn}},
+ let listener,data={},calls=[],opened=[],updates=[],navigationListener,alarmListener,alarm=null;
+ const chrome={alarms:{create:async(name,value)=>{alarm={name,...value};},clear:async()=>{alarm=null;},onAlarm:{addListener:fn=>alarmListener=fn}},runtime:{id:'test-extension',getURL:p=>'chrome-extension://test-extension/'+p,onMessage:{addListener:fn=>listener=fn}},
  storage:{local:{get:async()=>structuredClone(local),set:async x=>Object.assign(local,structuredClone(x)),remove:async k=>{delete local[k];}},session:{get:async()=>structuredClone(data),set:async x=>{data=structuredClone({...data,...x});},remove:async k=>{delete data[k];}}},
- tabs:{query:async()=>[{id:7,url:'https://zakup.gov.kz/cabinet/announcement/17920228'}],create:async options=>{opened.push(options);return {id:99};},
+ tabs:{query:async()=>[{id:7,url:'https://zakup.gov.kz/cabinet/announcement/17920228'}],create:async options=>{opened.push(options);return {id:99};},get:async()=>({status:'complete'}),
  onUpdated:{addListener:fn=>navigationListener=fn,removeListener:fn=>{if(navigationListener===fn)navigationListener=null;}},
  update:async(id,options)=>{updates.push({id,...options});setTimeout(()=>navigationListener?.(id,{status:'complete'}),0);}},
  scripting:{executeScript:async({args})=>{calls.push(args[1]);return [{result:await step(args[1])}];}}};
  const context={chrome,validateDraftPacket,runDraftStep,URL,Date,setTimeout,clearTimeout,GOSZAKUP_APP_ORIGINS:['http://localhost:8000'],importScripts(){}};
  vm.createContext(context);vm.runInContext(fs.readFileSync(__dirname+'/background.js','utf8'),context);
  const sender={id:chrome.runtime.id,url:chrome.runtime.getURL('popup.html')};
- return {calls,opened,updates,get job(){return data.draftJob;},send:(message,from=sender)=>new Promise(resolve=>{if(listener(message,from,resolve)===false)resolve({ignored:true});}),
+ return {calls,opened,updates,get alarm(){return alarm;},fire:async()=>{const a=alarm;alarm=null;alarmListener(a);await settle();},get job(){return data.draftJob;},send:(message,from=sender)=>new Promise(resolve=>{if(listener(message,from,resolve)===false)resolve({ignored:true});}),
   untrusted:()=>listener({type:'draft:start'},{id:'other',url:'https://zakup.gov.kz/'},()=>{throw Error('Unauthorized response');})};
 }
 const settle=()=>new Promise(resolve=>setTimeout(resolve,15));
@@ -46,6 +46,12 @@ const settle=()=>new Promise(resolve=>setTimeout(resolve,15));
  await uncertain.send({type:'draft:load',packet});await uncertain.send({type:'draft:start'});await settle();
  assert.equal(uncertain.job.createUncertain,true);assert.equal(mutationCalls,1);
  await uncertain.send({type:'draft:start'});await settle();assert.equal(mutationCalls,1);assert.equal(uncertain.job.status,'blocked');
+ assert.equal(uncertain.job.status,'blocked');
+ assert.ok((await uncertain.send({type:'draft:confirm-absent',...packet,announcement_number:'999-1'})).error);
+ const reset=await uncertain.send({type:'draft:confirm-absent',company_bin:packet.company_bin,announcement_number:packet.announcement_number,lot_number:packet.lot_number});
+ assert.equal(reset.job.createUncertain,false);assert.equal(reset.job.status,'blocked');
+ // Restore an ambiguous creation for the remaining duplicate-guard checks.
+ await uncertain.send({type:'draft:start'});await settle();
  const denied=await uncertain.send({type:'draft:load',packet});assert.match(denied.error,/неподтвержд/);
  const preflight=worker(async action=>action==='probe'?{next:'save_account'}:{blocked:true,uncertain:false,message:'Required choice missing'});
  await preflight.send({type:'draft:load',packet});await preflight.send({type:'draft:start'});await settle();
@@ -64,12 +70,22 @@ const settle=()=>new Promise(resolve=>setTimeout(resolve,15));
   assert.equal((await bridge.send({type:'bridge:prepare',packet},from)).ignored,true);
  }
  assert.equal(bridge.opened.length,1);
- const refused=await uncertain.send({type:'bridge:prepare',packet},appSender);assert.match(refused.error,/неподтвержд/);assert.equal(uncertain.opened.length,0);
+ const refused=await uncertain.send({type:'bridge:prepare',packet:{...packet,lot_number:'999-ЗЦП1'}},appSender);assert.match(refused.error,/неподтвержд/);assert.equal(uncertain.opened.length,0);
  const resumed=await happy.send({type:'bridge:prepare',packet},appSender);assert.equal(resumed.prepared,true);assert.equal(happy.job.number,'123');
  const queueSender={...appSender,url:'http://localhost:8000/workspace/drafts/'};
  const contextQueue={id:12,generation:'11111111-1111-4111-8111-111111111111'};
  const queued=await happy.send({type:'bridge:prepare',packet,queue_context:contextQueue},queueSender);
  assert.equal(queued.prepared,true);
+ const resetWorker=worker(async()=>({next:'open_form'}));
+ await resetWorker.send({type:'draft:load',packet:{...packet,existing_application_number:'123'}});
+ const resetPacket={...packet,existing_application_number:'',reset_absent_application:'123'};
+ await resetWorker.send({type:'bridge:prepare',packet:resetPacket,queue_context:contextQueue},queueSender);
+ assert.equal(resetWorker.job.number,'');
+ // Repeating a reset receipt must preserve a newer confirmed draft.
+ await resetWorker.send({type:'draft:clear'});
+ await resetWorker.send({type:'draft:load',packet:{...packet,existing_application_number:'999'}});
+ await resetWorker.send({type:'bridge:prepare',packet:resetPacket,queue_context:contextQueue},queueSender);
+ assert.equal(resetWorker.job.number,'999');
  const summary=await happy.send({type:'bridge:queue-status'},queueSender);
  assert.equal(summary.queue_context.id,12);assert.equal(summary.snapshot.number,'123');
  assert.equal(summary.snapshot.status,'ready');assert.equal(summary.snapshot.description_saved,false);
@@ -77,6 +93,13 @@ const settle=()=>new Promise(resolve=>setTimeout(resolve,15));
  assert.equal((await happy.send({type:'bridge:queue-status'},appSender)).ignored,true);
  const invalid=await happy.send({type:'bridge:prepare',packet,queue_context:{id:-1,generation:'bad'}},queueSender);
  assert.ok(invalid.error);
+ const auto=worker(async()=>({state:'complete',number:'456',lotConfirmed:true,message:'done'}));
+ await auto.send({type:'bridge:prepare',packet,queue_context:contextQueue,auto_start:true},queueSender);await settle();
+ assert.equal(auto.job.status,'complete');assert.equal(auto.job.tabId,99);assert.deepEqual(auto.calls,['probe']);
+ const autoBlocked=worker(async()=>({blocked:true,message:'Login required'}));
+ await autoBlocked.send({type:'bridge:prepare',packet,queue_context:contextQueue,auto_start:true},queueSender);await settle();
+ assert.equal(autoBlocked.job.status,'blocked');assert.equal(autoBlocked.calls.length,1);
+ assert.ok((await autoBlocked.send({type:'bridge:prepare',packet,auto_start:true},appSender)).error);
  const disk={};
  const before=worker(async action=>{if(action==='probe')return {next:'save_account'};throw Error('Browser crashed');},disk);
  await before.send({type:'draft:load',packet});await before.send({type:'draft:start'});await settle();
@@ -88,6 +111,31 @@ const settle=()=>new Promise(resolve=>setTimeout(resolve,15));
  await known.send({type:'draft:start'});await settle();
  assert.deepEqual(known.calls,['probe']);assert.equal(known.job.number,'73771733');
  assert.equal(JSON.stringify(disk).includes('bank_account'),false);
+ let down=true,created=0;
+ const retry=worker(async action=>{
+  if(down)return {blocked:true,retryable:true,uncertain:false,message:'Сервис КГД недоступен'};
+  if(action==='probe')return created?{state:'complete',number:'777',lotConfirmed:true}:{next:'save_account'};
+  created++;return {number:'777',lotConfirmed:true};
+ });
+ await retry.send({type:'draft:load',packet});await retry.send({type:'draft:start'});await settle();
+ assert.equal(retry.job.status,'waiting');assert.equal(created,0);assert.ok(retry.alarm.when>Date.now());
+ await retry.fire();assert.equal(retry.job.retryCount,2);assert.equal(created,0);
+ down=false;await retry.fire();assert.equal(retry.job.status,'complete');assert.equal(created,1);
+ const waiting=worker(async()=>({blocked:true,retryable:true,message:'Unavailable'}));
+ await waiting.send({type:'draft:load',packet});await waiting.send({type:'draft:start'});await settle();
+ for(let i=0;i<8;i++)await waiting.fire();
+ assert.equal(waiting.job.status,'blocked');assert.equal(waiting.alarm,null);
+ const stop=worker(async()=>({blocked:true,retryable:true,message:'Unavailable'}));
+ await stop.send({type:'draft:load',packet});await stop.send({type:'draft:start'});await settle();
+ await stop.send({type:'draft:stop'});assert.equal(stop.job.status,'paused');assert.equal(stop.alarm,null);
+ let unknownPhase=0,createRequests=0;
+ const ambiguous=worker(async action=>{
+  if(action==='probe')return unknownPhase===0?{next:'save_account'}:unknownPhase===1?{next:'open_form',resuming:false}:{state:'complete',number:'888',lotConfirmed:true};
+  createRequests++;unknownPhase=1;return {blocked:true,retryable:true,uncertain:true,message:'Сервис недоступен'};
+ });
+ await ambiguous.send({type:'draft:load',packet});await ambiguous.send({type:'draft:start'});await settle();
+ await ambiguous.fire();assert.equal(createRequests,1);assert.equal(ambiguous.job.status,'waiting');assert.equal(ambiguous.job.createUncertain,true);
+ unknownPhase=2;await ambiguous.fire();assert.equal(ambiguous.job.status,'complete');assert.equal(createRequests,1);
  console.log('Draft packet validation, sender restriction, confirmed completion and duplicate creation guard passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 

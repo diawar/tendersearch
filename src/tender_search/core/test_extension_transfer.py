@@ -34,7 +34,7 @@ class ExtensionTransferTests(TestCase):
         self.assertEqual(response.status_code,200)
         self.assertEqual(response['Cache-Control'],'no-store, private')
         self.assertEqual(response.json()['state'],'completed')
-        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'interesting')
+        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'preparing')
 
     def test_mismatch_or_missing_membership_creates_no_preparation(self):
         bad=dict(self.report,company_bin='123456789012')
@@ -69,8 +69,8 @@ class ExtensionTransferTests(TestCase):
         p=ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot)
         confirmed=p.portal_description_saved_at
         self.assertIsNotNone(confirmed)
-        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'interesting')
-        self.assertContains(self.client.get(f'/lots/{self.lot.pk}/preparation/'),'Описание товара заполнено')
+        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'preparing')
+        self.assertContains(self.client.get(f'/lots/{self.lot.pk}/preparation/'),'Черновик заполнен')
         from .lot_state import apply_personal_state
         from .templatetags.search_tags import application_portal_status
         apply_personal_state(self.owner,[self.lot])
@@ -97,16 +97,15 @@ class ExtensionTransferTests(TestCase):
         self.assertEqual(set(CollectionLot.objects.filter(profile__owner=self.owner,lot=self.lot).values_list('stage',flat=True)),{'applied'})
         self.assertTrue(LotOutcomeWatch.objects.get(owner=self.owner,lot=self.lot).enabled)
         self.assertFalse(UserLotPrice.objects.filter(owner=self.owner,lot=self.lot).exists())
-        other.refresh_from_db();self.assertEqual(other.stage,'interesting')
+        other.refresh_from_db();self.assertEqual(other.stage,'preparing')
         self.assertEqual(self.post_report(report).status_code,400)
 
     def test_submission_freezes_existing_estimate_and_cannot_undo_confirmed_submission(self):
         from .models import UserLotPrice
-        from .outcome_service import cancel_application
         price=UserLotPrice.objects.create(owner=self.owner,lot=self.lot,unit_gross='116',vat_rate='16')
         self.assertEqual(self.post_report(dict(self.report,state='submitted')).status_code,200)
         price.refresh_from_db();self.assertIsNotNone(price.locked_at);self.assertEqual(str(price.unit_gross),'116.00')
-        with self.assertRaises(ValueError):cancel_application(self.owner,self.lot)
+        self.assertEqual(self.client.post(f'/lots/{self.lot.pk}/application/cancel/').status_code,404)
 
     def test_report_cannot_move_final_stage_back_or_claim_description_from_unknown(self):
         from .workflow_state import update_workflow

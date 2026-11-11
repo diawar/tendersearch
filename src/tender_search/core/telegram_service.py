@@ -72,6 +72,10 @@ def record_contact(chat, text=None):
 
 
 def handle_update(update):
+    if isinstance(update.get('callback_query'),dict):
+        from .telegram_actions import handle_callback
+        handle_callback(update['callback_query'])
+        return
     message = update.get('message') or {}
     chat = message.get('chat') or {}
     if chat.get('type') != 'private' or not isinstance(chat.get('id'), int):
@@ -80,6 +84,9 @@ def handle_update(update):
     record_contact(chat, text)
     if text == '/stop':
         TelegramSubscription.objects.filter(chat_id=chat['id']).update(enabled=False)
+        from .workflow_notifications import cancel_pending
+        for owner_id in TelegramSubscription.objects.filter(chat_id=chat['id']).values_list('owner_id',flat=True):
+            cancel_pending(owner_id)
         return
     if not text.startswith('/start '):
         return
@@ -94,7 +101,7 @@ def handle_update(update):
 
 def poll_updates():
     cursor, _ = TelegramCursor.objects.get_or_create(pk=1)
-    updates = telegram_api('getUpdates', {'offset':cursor.offset, 'timeout':10, 'allowed_updates':['message']})
+    updates = telegram_api('getUpdates', {'offset':cursor.offset, 'timeout':10, 'allowed_updates':['message','callback_query']})
     for update in updates:
         handle_update(update)
         cursor.offset = max(cursor.offset, update['update_id']+1)
@@ -165,7 +172,7 @@ def scan_profile(profile_id, lease):
             if current.monitor_lease != lease or current.filters != profile.filters or not current.enabled: return
             baseline = current.index_baseline_at is None if settings.USE_LOCAL_INDEX else current.baseline_at is None
             from .models import UserLotWorkflow
-            archived_lots = set(UserLotWorkflow.objects.filter(owner=current.owner,stage='archived').values_list('lot_id',flat=True))
+            archived_lots = set(UserLotWorkflow.objects.filter(owner=current.owner,stage__in=('archived','not_participated')).values_list('lot_id',flat=True))
             for hit in job.hits.select_related('lot__announcement','lot__customer').iterator():
                 lot = hit.lot
                 if lot.pk in archived_lots:
@@ -212,7 +219,11 @@ def message_for(delivery):
             f'{telegram_remaining_time(lot.announcement.deadline)}'
             f'\nПроверьте актуальные условия на портале.')
     url = lot.portal_url
-    return {'text':body,'parse_mode':'HTML','link_preview_options':{'is_disabled':True},'reply_markup':{'inline_keyboard':[[{'text':('Открыть на госзакупе ↗' if lot.announcement.source == 'zakup' else f'Открыть на {lot.portal_label} ↗'),'url':url}]]}}
+    buttons=[[{'text':('Открыть на госзакупе ↗' if lot.announcement.source == 'zakup' else f'Открыть на {lot.portal_label} ↗'),'url':url}]]
+    from .telegram_actions import callback_data
+    action=callback_data(delivery)
+    if action:buttons.insert(0,[{'text':'⭐ В интересные','callback_data':action}])
+    return {'text':body,'parse_mode':'HTML','link_preview_options':{'is_disabled':True},'reply_markup':{'inline_keyboard':buttons}}
 
 def deliver_pending():
     if not settings.TELEGRAM_BOT_TOKEN or not in_work_hours(): return
@@ -223,12 +234,23 @@ def deliver_pending():
     for delivery in deliveries[:20]:
         if not in_work_hours(): return
         from .models import UserLotWorkflow
-        if UserLotWorkflow.objects.filter(owner_id=delivery.owner_id,lot_id=delivery.lot_id,stage='archived').exists():
+        raw_status=(delivery.lot.raw or {}).get('status') or {}
+        status_id=raw_status.get('id') if isinstance(raw_status,dict) else raw_status
+        status_id=status_id or (delivery.lot.raw or {}).get('status_id')
+        if (UserLotWorkflow.objects.filter(owner_id=delivery.owner_id,lot_id=delivery.lot_id,stage__in=('archived','not_participated')).exists()
+                or (delivery.lot.announcement.deadline and delivery.lot.announcement.deadline<=timezone.now())
+                or (status_id and str(status_id) not in ('6','7','9'))):
             TelegramDelivery.objects.filter(pk=delivery.pk,state='pending').update(state='cancelled')
             continue
         sub=TelegramSubscription.objects.filter(owner=delivery.owner,enabled=True,chat_id__isnull=False).first()
-        if not sub: continue
+        if not sub:
+            TelegramDelivery.objects.filter(pk=delivery.pk,state='pending').update(state='cancelled')
+            continue
         if not TelegramDelivery.objects.filter(pk=delivery.pk,state='pending').update(state='sending',updated_at=timezone.now()): continue
+        if not delivery.interest_token:
+            from uuid import uuid4
+            delivery.interest_token=uuid4()
+            TelegramDelivery.objects.filter(pk=delivery.pk,state='sending').update(interest_token=delivery.interest_token)
         try:
             result=telegram_api('sendMessage',dict(message_for(delivery),chat_id=sub.chat_id))
             TelegramDelivery.objects.filter(pk=delivery.pk).update(state='sent',message_id=result['message_id'],error='')
@@ -238,6 +260,8 @@ def deliver_pending():
                 return
             if exc.code==403:
                 TelegramSubscription.objects.filter(pk=sub.pk).update(enabled=False)
+                from .workflow_notifications import cancel_pending
+                cancel_pending(delivery.owner_id)
             TelegramDelivery.objects.filter(pk=delivery.pk).update(state='uncertain' if exc.code==0 else 'error',error='Доставка не подтверждена.' if exc.code==0 else f'Telegram: {exc.code}')
         except Exception:
             TelegramDelivery.objects.filter(pk=delivery.pk).update(state='error',error='Ошибка формирования сообщения.')

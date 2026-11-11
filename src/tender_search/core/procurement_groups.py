@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from django.utils import timezone
 from tender_search.client import utc_datetime, SourceError
 
@@ -84,6 +84,13 @@ def status_matches(row, selected, now=None):
 
 def runtime_status_filters(filters, selected, now=None):
     filters=dict(filters)
+    if str(filters.get("remaining_hours")) in {"24", "48"}:
+        current=now or timezone.now()
+        end=current+timedelta(hours=int(filters.pop("remaining_hours")))
+        existing=utc_datetime(filters.get("offer_end_date__lte"))
+        filters["offer_end_date__lte"]=min(end,existing).isoformat() if existing else end.isoformat()
+        lower=utc_datetime(filters.get("offer_end_date__gte"))
+        filters["offer_end_date__gte"]=max(current,lower).isoformat() if lower else current.isoformat()
     if selected and all(value.startswith(('open:','upcoming:')) for value in selected):
         now=now or timezone.now()
         bound=filters.get('offer_end_date__gte')

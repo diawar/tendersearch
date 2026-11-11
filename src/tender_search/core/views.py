@@ -1,7 +1,7 @@
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.db import connection, transaction
-from django.db.models import DateTimeField, F, Q, Value
+from django.db.models import DateTimeField, F, Q, Value, OuterRef, Subquery
 from django.db.models.fields.json import KeyTextTransform
 from django.db.models.functions import Cast, NullIf
 from django.http import JsonResponse, FileResponse, Http404
@@ -134,12 +134,12 @@ def result_context(request, lots):
 
 @login_required
 def lot_ui_state(request):
-    from .lot_state import apply_personal_state, collection_lot_count
+    from .lot_state import apply_personal_controls, collection_lot_count
     raw_ids = request.GET.get('ids', '').split(',')
     if len(raw_ids) > 100 or any(not value.isdecimal() or len(value) > 18 for value in raw_ids):
         return JsonResponse({'error': 'Invalid lot ids'}, status=400)
-    lots = list(Lot.objects.filter(pk__in=[int(value) for value in raw_ids]))
-    apply_personal_state(request.user, lots)
+    lots = list(Lot.objects.filter(pk__in=[int(value) for value in raw_ids]).only('pk', 'announcement_id'))
+    apply_personal_controls(request.user, lots)
     response = JsonResponse({'owner': str(request.user.pk), 'lots': [
         {'id': str(lot.pk), 'favorite': lot.is_favorite, 'watched': lot.is_status_watched,
          'saved': lot.is_in_collection} for lot in lots],
@@ -193,23 +193,18 @@ def search_results(request, job_id):
         # Intermediate hits are hidden until completion; avoid loading their
         # rows and related objects on every readiness poll.
         hits = hits.none()
-    remaining_days = request.GET.get('remaining', '')
-    if remaining_days in {'1', '2'}:
-        now = timezone.now()
-        hits = hits.filter(lot__announcement__deadline__gt=now,
-                           lot__announcement__deadline__lte=now+timedelta(days=int(remaining_days)))
-    else:
-        remaining_days = ''
     sort_headers = {}
     for key, label in [('amount', 'Сумма, ₸'), ('start', 'Начало'), ('end', 'Окончание')]:
         active = sort_key == key
         next_sort = ('-' if active and not descending else '') + key
-        url = f'?sort={next_sort}&per_page={pagination["per_page"]}' + (f'&remaining={remaining_days}' if remaining_days else '')
+        url = f'?sort={next_sort}&per_page={pagination["per_page"]}'
         sort_headers[key] = {'label': label, 'url': url,
             'arrow': ('↓' if descending else '↑') if active else '↕',
             'aria': ('descending' if descending else 'ascending') if active else 'none'}
     labels = {'amount': 'По сумме', 'start': 'По началу подачи', 'end': 'По окончанию подачи'}
-    sort_context = {**pagination,'result_sort': selected_sort if sort_key != 'published' else '',
+    age = max(0, (timezone.now() - job.created_at).total_seconds())
+    sort_context = {**pagination,'poll_delay': 1000 if age < 5 else 2000 if age < 20 else 5000,
+        'result_sort': selected_sort if sort_key != 'published' else '',
         'result_sort_label': (labels[sort_key] + (' ↓' if descending else ' ↑')) if sort_key in labels else 'Сначала новые',
         'sort_headers': sort_headers}
     excluded_terms = job.specification.get("exclude", [])
@@ -226,13 +221,15 @@ def search_results(request, job_id):
             **sort_context,
             "job": job, "local_coverage": job.source_counts.get("__index__"),
             "page": page, "pending": job.status in {"queued", "running"},
-            "remaining_days": remaining_days})
+            })
     spec = job.specification
     initial = {"terms": "; ".join(spec.get("terms", [])), "exclude": "; ".join(spec.get("exclude", [])),
                "mode": spec.get("mode", "any"), "kind": spec.get("kind", "contains"), "pages": spec.get("pages", 1), "depth": spec.get("depth", 500),
                "customer_bin": spec.get("customer_bin", ""),
                "only_advance": spec.get("filters", {}).get("only_advance", False),
                "only_medical": spec.get("filters", {}).get("only_medical", False),
+               "in_documents": spec.get("filters", {}).get("in_documents", False),
+               "remaining_hours": str(spec.get("filters", {}).get("remaining_hours", "")),
                "subject": spec.get("filters", {}).get("subject", "")}
     for field, param in [("amount_min", "total_price__gte"), ("amount_max", "total_price__lte"),
                          ("deadline_from", "offer_end_date__gte"), ("deadline_to", "offer_end_date__lte"),
@@ -258,7 +255,7 @@ def search_results(request, job_id):
         ignored = {'depth', 'pages', 'auto_pages', 'backend'}
         profile_saved = {k:v for k,v in current_spec.items() if k not in ignored} == {k:v for k,v in active_profile.filters.get('specification', {}).items() if k not in ignored}
     return render(request, "core/results.html", {**sort_context, "active_profile": active_profile, "profile_saved": profile_saved, "job": job, "local_coverage": job.source_counts.get("__index__"), "page": page, "pending": job.status in {"queued", "running"},
-        "remaining_days": remaining_days, "form": SearchForm(initial=initial), "profiles": SearchProfile.objects.filter(owner=request.user).order_by("-updated_at")})
+         "form": SearchForm(initial=initial), "profiles": SearchProfile.objects.filter(owner=request.user).order_by("-updated_at")})
 
 
 def queue_refresh(lot):
@@ -287,8 +284,12 @@ def lot_revisions(lot, batch, specification):
 def expire_lot_jobs(lot, batch=None, specification=None):
     now = timezone.now()
     if lot.refresh_state == 'running' and lot.refresh_started_at and lot.refresh_started_at < now-timedelta(minutes=6):
-        Lot.objects.filter(pk=lot.pk, refresh_state='running', refresh_started_at=lot.refresh_started_at).update(refresh_state='error', refresh_error='Обновление не завершилось вовремя.')
-        lot.refresh_from_db(fields=['refresh_state', 'refresh_error', 'checked_at'])
+        updated = Lot.objects.filter(pk=lot.pk, refresh_state='running', refresh_started_at=lot.refresh_started_at).update(refresh_state='error', refresh_error='Обновление не завершилось вовремя.')
+        if updated:
+            # Keep the revision paired with the loaded body even if the worker
+            # finishes immediately after this timeout update.
+            lot.refresh_state = 'error'
+            lot.refresh_error = 'Обновление не завершилось вовремя.'
     for job, minutes, message in (
         (batch, 25, 'Загрузка не завершилась вовремя. Повторите попытку.'),
         (specification, 15, 'Извлечение не завершилось вовремя. Повторите запрос.'),
@@ -319,6 +320,7 @@ def lot_detail_status(request, lot_id):
 @login_required
 def lot_detail(request, lot_id, price_form=None, updates=False):
     lot = get_object_or_404(Lot.objects.select_related("announcement", "customer"), pk=lot_id)
+    loaded_checked_at = lot.checked_at
     back_key = f"lot_return_{lot_id}"
     back_url = reverse('search')
     candidates = (request.session.get(back_key),) if updates else (request.GET.get('next'), request.META.get('HTTP_REFERER'), request.session.get(back_key))
@@ -336,17 +338,27 @@ def lot_detail(request, lot_id, price_form=None, updates=False):
     expire_lot_jobs(lot)
     if not updates and not lot.is_archived and (not lot.refresh_state or (lot.refresh_state == "done" and lot.checked_at and lot.checked_at < timezone.now()-timedelta(minutes=5))):
         queue_refresh(lot)
-        lot.refresh_from_db()
+        # The task updates the body asynchronously. Keep joined relations and
+        # request-scoped pricing data; only refresh its scheduling metadata now.
+        lot.refresh_from_db(fields=['refresh_state', 'refresh_started_at', 'refresh_error', 'checked_at'])
+    if lot.checked_at != loaded_checked_at:
+        # A fast worker may already have committed new data. Read body and
+        # revision together, then rebuild quantities/prices from that same body.
+        lot = get_object_or_404(Lot.objects.select_related('announcement', 'customer'), pk=lot_id)
+        result_context(request, [lot])
     batch = LotDocumentDownload.objects.filter(lot=lot).first() if lot.is_favorite else None
     documents = []
     if lot.is_favorite or lot.is_archived:
-        for doc in Document.objects.filter(announcement=lot.announcement).filter(Q(lot=lot)|Q(lot__isnull=True)).prefetch_related('versions').order_by('name'):
-            doc.saved_version = max(doc.versions.all(),key=lambda version:version.pk,default=None)
+        latest = DocumentVersion.objects.filter(document_id=OuterRef('pk')).order_by('-pk').values('pk')[:1]
+        for doc in Document.objects.filter(announcement=lot.announcement).filter(Q(lot=lot)|Q(lot__isnull=True)).annotate(saved_version_id=Subquery(latest)).order_by('name'):
             documents.append(doc)
     specification = LotSpecification.objects.filter(owner=request.user,lot=lot).first()
     expire_lot_jobs(lot, batch, specification)
     from .lot_pricing import pricing_context
-    return render(request, "core/_lot_detail.html" if updates or request.headers.get("HX-Request") else "core/lot_detail.html", {"lot_description": "\n".join(dict.fromkeys(line.strip() for line in lot.description.splitlines())), "lot_revisions":lot_revisions(lot,batch,specification),"specification":specification,"specification_pending":bool(specification and specification.state in ('queued','running')),**pricing_context(request.user, lot, price_form), "lot": lot, "back_url": back_url, "documents": documents, "document_batch": batch, "documents_pending": bool(batch and batch.state in {"queued", "running"}), "outcome_watch": LotOutcomeWatch.objects.filter(owner=request.user, lot=lot).first(), "lot_note": UserLotNote.objects.filter(owner=request.user, lot=lot).values_list("text", flat=True).first() or ""})
+    from .shipping import context as shipment_context
+    from .models import CollectionLot
+    untriaged_item = CollectionLot.objects.filter(profile__owner=request.user,lot=lot,stage='new').order_by('pk').first() if lot.workflow and lot.workflow.stage == 'new' else None
+    return render(request, "core/_lot_detail.html" if updates or request.headers.get("HX-Request") else "core/lot_detail.html", {"untriaged_item":untriaged_item,"lot_description": "\n".join(dict.fromkeys(line.strip() for line in lot.description.splitlines())), "lot_revisions":lot_revisions(lot,batch,specification),"specification":specification,"specification_pending":bool(specification and specification.state in ('queued','running')),**pricing_context(request.user, lot, price_form), **shipment_context(request.user, lot), "lot": lot, "back_url": back_url, "documents": documents, "document_batch": batch, "documents_pending": bool(batch and batch.state in {"queued", "running"}), "outcome_watch": lot.personal_outcome_watch, "lot_note": UserLotNote.objects.filter(owner=request.user, lot=lot).values_list("text", flat=True).first() or ""})
 
 
 @login_required
@@ -367,57 +379,36 @@ def lot_specification_extract(request, lot_id):
 @login_required
 @require_POST
 def lot_price_save(request, lot_id):
-    from .lot_pricing import price_entry_data, LotPriceForm
-    from .models import CollectionLot
+    from .lot_pricing import price_entry_data, LotPriceForm, company_vat_rate
+    from .models import CollectionLot, DraftQueueItem
     from .outcome_service import register_watch
     from django.contrib import messages
     lot = get_object_or_404(Lot.objects.select_related('announcement'), pk=lot_id)
+    if DraftQueueItem.objects.filter(owner=request.user,lot=lot,state__in=('running','waiting')).exists():
+        raise PermissionDenied
     if price_entry_data(lot) is None:
         raise PermissionDenied
-    if not CollectionLot.objects.filter(profile__owner=request.user,lot=lot,stage='interesting').exists() or UserLotPrice.objects.filter(owner=request.user,lot=lot,locked_at__isnull=False).exists():
+    if not CollectionLot.objects.filter(profile__owner=request.user,lot=lot,stage='preparing').exists() or UserLotPrice.objects.filter(owner=request.user,lot=lot,locked_at__isnull=False).exists():
         raise PermissionDenied
-    form = LotPriceForm(request.POST)
+    form = LotPriceForm(request.POST, lot=lot, initial={'vat_rate': company_vat_rate(request.user)})
     if not form.is_valid():
-        response = lot_detail(request, lot_id, price_form=form)
+        from .preparation import prepare_application
+        response = prepare_application(request, lot_id, price_form=form)
         response.status_code = 400
         return response
     with transaction.atomic():
         list(SearchProfile.objects.select_for_update().filter(owner=request.user).order_by('pk'))
-        interested=list(CollectionLot.objects.select_for_update().filter(profile__owner=request.user,lot=lot,stage='interesting'))
+        interested=list(CollectionLot.objects.select_for_update().filter(profile__owner=request.user,lot=lot,stage='preparing'))
         saved=UserLotPrice.objects.select_for_update().filter(owner=request.user,lot=lot).first()
         if not interested or (saved and saved.locked_at):
             raise PermissionDenied
         UserLotPrice.objects.update_or_create(owner=request.user,lot=lot,
-            defaults={'unit_gross':form.cleaned_data['unit_gross'],'vat_rate':form.cleaned_data['vat_rate'], 'locked_at':timezone.now()})
-        from .workflow_state import update_workflow
-        update_workflow(request.user.pk, lot.pk, stage='applied', outcome='', result_tracking=True,
-            expired_from_stage='', keep_after_deadline=False)
-        register_watch(request.user.pk,lot.pk)
-        from .workflow_state import sync_lot
-        sync_lot(request.user.pk,lot.pk)
-        messages.success(request, 'Лот перенесён в «Подали заявку». Цена зафиксирована, включена проверка итогов.')
-    target = reverse('lot_detail', kwargs={'lot_id':lot.pk})
+            defaults={'unit_gross':form.cleaned_data['unit_gross'],'vat_rate':form.cleaned_data['vat_rate'], 'locked_at':None})
+        messages.success(request, 'Цена сохранена в подготовке. Заявка ещё не подана.')
+    target = reverse('application_preparation', kwargs={'lot_id':lot.pk})
     back = request.POST.get('next', '')
     if back and url_has_allowed_host_and_scheme(back, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
         target += '?' + urlencode({'next':back})
-    return redirect(target)
-
-
-@login_required
-@require_POST
-def lot_application_cancel(request, lot_id):
-    from .outcome_service import cancel_application
-    from django.contrib import messages
-    lot=get_object_or_404(Lot,pk=lot_id)
-    try:
-        cancel_application(request.user,lot)
-    except ValueError as exc:
-        raise PermissionDenied(str(exc))
-    messages.success(request,'Отметка о подаче отменена. Лот возвращён в «Интересные», цена доступна для изменения.')
-    target=reverse('lot_detail',kwargs={'lot_id':lot.pk})
-    back=request.POST.get('next','')
-    if back and url_has_allowed_host_and_scheme(back,allowed_hosts={request.get_host()},require_https=request.is_secure()):
-        target+='?'+urlencode({'next':back})
     return redirect(target)
 
 
@@ -515,9 +506,9 @@ def notification_settings(request):
     from django.conf import settings
     from .telegram_service import connection_link
     from .forms import CompanySettingsForm
-    company = CompanySettings.objects.filter(owner=request.user).first()
+    company, _ = CompanySettings.objects.get_or_create(owner=request.user)
     company_form = CompanySettingsForm(request.POST if request.method == 'POST' and request.POST.get('action') == 'company' else None,
-        initial={key:getattr(company,key,'') for key in CompanySettingsForm.base_fields})
+        initial={key:getattr(company,key,True if key == 'is_vat_payer' else '') for key in CompanySettingsForm.base_fields})
     sub = TelegramSubscription.objects.filter(owner=request.user).first()
     link = None
     if request.method == "POST":
@@ -529,7 +520,7 @@ def notification_settings(request):
                     reset_company(request.user.pk, company_form.cleaned_data['company_bin'])
                     current=CompanySettings.objects.select_for_update().get(owner=request.user)
                     for key,value in company_form.cleaned_data.items():
-                        if key!='company_bin' and key in request.POST:setattr(current,key,value)
+                        if key!='company_bin' and (key in request.POST or (key=='legal_address' and any(name in request.POST for name in ('address_city','address_street','address_house','address_office')))):setattr(current,key,value)
                     current.save()
                 messages.success(request, 'Реквизиты компании сохранены.')
                 return redirect('notification_settings')
@@ -537,6 +528,8 @@ def notification_settings(request):
             link = connection_link(request.user)
             sub = TelegramSubscription.objects.get(owner=request.user)
         elif request.POST.get("action") == "disconnect":
+            from .workflow_notifications import cancel_pending
+            cancel_pending(request.user.pk)
             TelegramSubscription.objects.filter(owner=request.user).update(enabled=False,chat_id=None,link_hash="",link_expires_at=None)
             SearchProfile.objects.filter(owner=request.user).update(enabled=False)
             StatusDelivery.objects.filter(watch__owner=request.user,state="pending").update(state="cancelled")

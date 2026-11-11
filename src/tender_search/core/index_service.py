@@ -5,7 +5,9 @@ import uuid
 import hashlib
 import json
 
-from django.db import transaction
+from django.conf import settings
+from django.db import connection, transaction
+from django.db.models import Count, Q
 from django.utils import timezone
 
 from tender_search.client import SourceError, utc_datetime
@@ -56,13 +58,15 @@ def date_value(value):
     return timezone.make_aware(value) if timezone.is_naive(value) else value
 
 
-def index_coverage():
+def index_coverage(*, diagnostics=True):
     now = timezone.now()
     state = ProcurementIndex.objects.filter(pk=1).first()
-    count = IndexedLot.objects.filter(current=True, deadline__gt=now).count()
-    missing = incomplete_rows().count()
+    count = IndexedLot.objects.filter(current=True, deadline__gt=now).count() if diagnostics else None
+    missing = incomplete_rows().count() if diagnostics else incomplete_rows().exists()
     detail_tasks = AnnouncementRefresh.objects.filter(active=True, deadline__gt=now)
-    urgent = detail_tasks.filter(urgent=True).count()
+    detail_counts = detail_tasks.aggregate(urgent=Count('pk', filter=Q(urgent=True)),
+        due=Count('pk', filter=Q(due_at__lte=now)), errors=Count('pk', filter=~Q(error=''))) if diagnostics else {}
+    urgent = detail_counts['urgent'] if diagnostics else detail_tasks.filter(urgent=True).exists()
     fresh = bool(state and state.completed_at and state.completed_at >= now-timedelta(hours=6))
     elapsed = None
     if state and state.started_at:
@@ -72,12 +76,13 @@ def index_coverage():
     return {'loaded': count, 'source_count': state.source_count if state else 0,
             'elapsed_seconds': elapsed,
             'elapsed_label': f'{elapsed//3600:02d}:{elapsed//60%60:02d}:{elapsed%60:02d}' if elapsed is not None else '',
-            'skipped': IndexedLot.objects.filter(details_skipped=True, deadline__gt=now).count(),
+            'skipped': IndexedLot.objects.filter(details_skipped=True, deadline__gt=now).count() if diagnostics else None,
             'completed_at': state.completed_at.isoformat() if state and state.completed_at else None,
             'heartbeat_at': state.heartbeat_at.isoformat() if state and state.heartbeat_at else None,
-            'building': bool(state and state.pending), 'missing_details': missing,
-            'detail_urgent': urgent, 'detail_due': detail_tasks.filter(due_at__lte=now).count(),
-            'detail_errors': detail_tasks.exclude(error='').count(),
+            'building': bool(state and state.pending), 'missing_details': missing if diagnostics else None,
+            'has_missing_details': bool(missing), 'has_urgent_details': bool(urgent),
+            'detail_urgent': urgent if diagnostics else None, 'detail_due': detail_counts.get('due'),
+            'detail_errors': detail_counts.get('errors'), 'diagnostics_measured': diagnostics,
             'ready': fresh and not state.error and not state.paused and not missing and not urgent if state else False,
             'paused': bool(state and state.paused), 'error': state.error if state else '',
             'available': bool(state)}
@@ -124,6 +129,10 @@ def collect_index_page(api):
 def local_matches(row, spec, now, address_prefixes):
     from .subjects import subject_matches
     filters = spec.get('filters', {})
+    if str(filters.get('remaining_hours')) in {'24', '48'}:
+        deadline = utc_datetime(row.get('offer_end_date'))
+        if not deadline or not now < deadline <= now+timedelta(hours=int(filters['remaining_hours'])):
+            return False
     if not subject_matches(row, filters.get('subject')):
         return False
     if filters.get('only_advance') and row.get('_has_advance') is not True:
@@ -156,8 +165,8 @@ def execute_local_search(job_id):
         from itertools import chain
         from .models import MedicalIndexedLot
         from .medical_index import coverage as medical_coverage
-        medical = medical_coverage()
-        coverage = medical.copy() if filters.get('only_medical') else index_coverage()
+        medical = medical_coverage(diagnostics=False)
+        coverage = medical.copy() if filters.get('only_medical') else index_coverage(diagnostics=False)
         if not filters.get('only_medical'):
             coverage['ready'] = coverage['ready'] and medical['ready']
         coverage['medical'] = medical
@@ -175,6 +184,19 @@ def execute_local_search(job_id):
         job.source_counts = {'__index__': coverage, '__local_candidates__': None, '__query__': query_info}
         accepted = set()
         matcher = PreparedMatcher(spec)
+        document_matches = {}
+        if filters.get("in_documents"):
+            from .technical_documents import matching_lots
+            document_matches = matching_lots(matcher, now=now,
+                is_active=lambda: WebSearch.objects.filter(pk=job.pk, status='running').exists())
+            if document_matches is None:
+                return
+            from .query_search import document_sources
+            sources = document_sources(sources, spec, prefixes, document_matches)
+            query_info['document_prefilter'] = bool(settings.SEARCH_DB_PREFILTERS)
+            query_info['enabled'] = bool(settings.SEARCH_DB_PREFILTERS and connection.vendor == 'postgresql')
+            coverage["documents"] = "Поиск по извлечённому тексту техспецификаций; сканы и недоступные файлы не охвачены."
+            supported = False
         for row in chain.from_iterable(rows.order_by('source_id').values_list('row', flat=True).iterator(chunk_size=200) for rows in sources):
             if job.scanned % 100 == 0:
                 # The guarded update both checks cancellation and publishes
@@ -193,6 +215,11 @@ def execute_local_search(job_id):
             if filters.get('total_price__lte') is not None and (amount is None or Decimal(str(amount)) > Decimal(str(filters['total_price__lte']))):
                 continue
             found = match_lot(row.get('name_ru') or row.get('name'), row.get('description_ru'), matcher)
+            from tender_search.matching import normalize
+            excluded_in_metadata = any(term in normalize(f"{row.get('name_ru') or row.get('name') or ''} {row.get('description_ru') or ''}") for term in matcher.excluded)
+            if not found and document_matches and not excluded_in_metadata:
+                key = (row.get('_source', 'zakup'), row.get('announcement_id'), row.get('id'))
+                found = document_matches.get(key) or document_matches.get((*key[:2], None))
             identity = lot_identity(row)
             if found and identity not in accepted:
                 accepted.add(identity)

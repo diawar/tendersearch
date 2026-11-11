@@ -42,6 +42,19 @@ class ResultSortingTests(TestCase):
         self.assertEqual(self.ids(self.fetch('amount')), [5, 2, 3, 1, 4])
         self.assertEqual(self.ids(self.fetch('-amount')), [1, 3, 5, 2, 4])
 
+    def test_pending_search_polls_back_off_and_completed_search_stops(self):
+        for age,delay in [(0,1000),(10,2000),(40,5000)]:
+            WebSearch.objects.filter(pk=self.job.pk).update(status='running',created_at=timezone.now()-timedelta(seconds=age))
+            response=self.client.get(self.url,HTTP_HX_REQUEST='true')
+            root=BeautifulSoup(response.content,'html.parser').select_one('#search-results')
+            self.assertTrue(root.has_attr('data-background-poll'))
+            self.assertEqual(root['hx-trigger'],f'load delay:{delay}ms, app:resume')
+            self.assertFalse(root.has_attr('hx-sync'),'Polling must not suppress POST forms inside the results')
+        WebSearch.objects.filter(pk=self.job.pk).update(status='done')
+        root=BeautifulSoup(self.client.get(self.url,HTTP_HX_REQUEST='true').content,'html.parser').select_one('#search-results')
+        self.assertFalse(root.has_attr('data-background-poll'))
+        self.assertFalse(root.has_attr('hx-trigger'))
+
     def test_application_start_and_end_are_independent_and_unknown_dates_last(self):
         self.assertEqual(self.ids(self.fetch('start')), [2, 3, 1, 5, 4])
         self.assertEqual(self.ids(self.fetch('-start')), [1, 3, 2, 5, 4])
@@ -58,7 +71,7 @@ class ResultSortingTests(TestCase):
         soup = BeautifulSoup(response.content, 'html.parser')
         amount = soup.select_one('th a.sort-heading')
         query = parse_qs(urlsplit(amount['href']).query)
-        self.assertEqual(query, {'sort': ['-amount'], 'remaining': ['2'], 'per_page':['20']})
+        self.assertEqual(query, {'sort': ['-amount'], 'per_page':['20']})
         self.assertEqual(amount.find_parent('th')['aria-sort'], 'ascending')
         self.assertEqual(amount['hx-target'], '#search-results')
         self.assertEqual(len(soup.select('.date-sort-links a')), 2)
@@ -68,13 +81,13 @@ class ResultSortingTests(TestCase):
         for identifier in range(6, 32):
             self.add(identifier, 200+identifier, 1, 1)
         response = self.fetch('amount', remaining='2')
-        self.assertEqual(response.context['page'].paginator.count, 28)
-        self.assertEqual(self.ids(response)[:2], [3, 1])
+        self.assertEqual(response.context['page'].paginator.count, 31)
+        self.assertEqual(self.ids(response)[:2], [5, 2])
         soup = BeautifulSoup(response.content, 'html.parser')
         next_link = soup.select_one('.pagination a')
         self.assertEqual(parse_qs(urlsplit(next_link['href']).query),
-                         {'page': ['2'], 'sort': ['amount'], 'remaining': ['2'], 'per_page':['20']})
-        self.assertEqual(self.ids(self.fetch('amount', remaining='2', page='2')), list(range(24,32)))
+                         {'page': ['2'], 'sort': ['amount'], 'per_page':['20']})
+        self.assertEqual(self.ids(self.fetch('amount', remaining='2', page='2')), list(range(22,32))+[4])
         for link in soup.select('.view-switch a, .deadline-filters a'):
             self.assertEqual(parse_qs(urlsplit(link['href']).query)['sort'], ['amount'])
         self.assertContains(self.fetch('amount', view='cards'), 'results-grid')
@@ -95,7 +108,17 @@ class ResultSortingTests(TestCase):
         soup = BeautifulSoup(response.content, 'html.parser')
         query = parse_qs(urlsplit(soup.select_one('#search-results')['hx-get']).query)
         self.assertEqual(query['sort'], ['-end'])
-        self.assertEqual(query['remaining'], ['1'])
+        self.assertNotIn('remaining', query)
         self.assertEqual(self.ids(response), [])
         self.client.force_login(get_user_model().objects.create_user('another-owner'))
         self.assertEqual(self.fetch('amount').status_code, 404)
+
+    def test_waiting_illustrations_are_only_present_while_search_is_pending(self):
+        self.job.status = 'running'
+        self.job.save()
+        soup = BeautifulSoup(self.fetch().content, 'html.parser')
+        self.assertEqual(len(soup.select('.search-progress-art [data-progress-frame]')), 3)
+        self.assertIn('empty-results', soup.find('h2', string='Идёт поиск').parent['class'])
+        self.job.status = 'done'
+        self.job.save()
+        self.assertNotContains(self.fetch(), 'data-progress-frame')

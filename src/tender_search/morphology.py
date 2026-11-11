@@ -36,7 +36,15 @@ class PhraseMatcher:
         self.lemmas=[known_lemmas(word) for word in self.words]
         self.inflected=None
         if any(self.lemmas):
-            pieces=[r'([а-яё]+)' if lemmas else '('+re.escape(word)+r'\w*)' for word,lemmas in zip(self.words,self.lemmas)]
+            pieces=[]
+            for word, lemmas in zip(self.words, self.lemmas):
+                if lemmas:
+                    # The lexeme prefix is necessary across every known form.
+                    # Avoid parsing every unrelated word pair in a long PDF.
+                    prefix=phrase_candidate_prefix(word)
+                    pieces.append('('+re.escape(prefix)+r'[а-яё]*)' if prefix else r'([а-яё]+)')
+                else:
+                    pieces.append('('+re.escape(word)+r'\w*)')
             # Lookahead allows overlapping windows of adjacent words.
             self.inflected=re.compile(r'(?<!\w)(?=('+r'\s+'.join(pieces)+r')(?!\w))',re.IGNORECASE)
 

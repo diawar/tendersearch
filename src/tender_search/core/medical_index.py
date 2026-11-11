@@ -27,11 +27,11 @@ def method_id(name):
     return identifier
 
 
-def coverage():
+def coverage(*, diagnostics=True):
     now = timezone.now()
     states = list(MedicalIndex.objects.all())
     ready = len(states) == len(HOSTS) and all(s.completed_at and s.completed_at >= now-timedelta(hours=6) and not s.error for s in states)
-    return {'loaded': MedicalIndexedLot.objects.filter(current=True, deadline__gt=now).count(),
+    return {'loaded': MedicalIndexedLot.objects.filter(current=True, deadline__gt=now).count() if diagnostics else None,
             'ready': bool(ready), 'available': bool(states),
             'building': any(s.cursor for s in states),
             'error': '; '.join(f'{HOSTS[s.source]}: {s.error}' for s in states if s.error),

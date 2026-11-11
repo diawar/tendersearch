@@ -48,18 +48,17 @@ class StatusWatchTests(TestCase):
         self.assertEqual(StatusDelivery.objects.get(event_key='test').state,'cancelled')
     def test_initial_confirmation_and_only_changed_status(self):
         self.enable()
-        self.scan({'id':1000,'status':{'id':6,'name':'Опубликован'}})
+        self.scan({'id':1000,'status':{'id':6,'name':'Published'}})
+        self.assertFalse(StatusDelivery.objects.exists())
+        self.scan({'id':1000,'status':{'id':6,'name':'Published'}})
+        self.assertFalse(StatusDelivery.objects.exists())
+        self.scan({'id':1000,'status':{'id':10,'name':'Completed'}})
         self.assertEqual(StatusDelivery.objects.count(),1)
-        self.assertIn('Слежение включено',StatusDelivery.objects.get().payload['text'])
-        watch=AnnouncementWatch.objects.get();self.assertEqual(watch.next_check_at.astimezone(__import__('zoneinfo').ZoneInfo('Asia/Almaty')).hour,7)
-        self.scan({'id':1000,'status':{'id':6,'name':'Опубликован'}})
-        self.assertEqual(StatusDelivery.objects.count(),1)
-        self.scan({'id':1000,'status':{'id':10,'name':'Завершён'}})
+        changed=StatusDelivery.objects.get().payload['text']
+        self.assertIn('Published',changed);self.assertIn('Completed',changed)
+        self.scan({'id':1000,'status':{'id':6,'name':'Published'}})
         self.assertEqual(StatusDelivery.objects.count(),2)
-        changed=StatusDelivery.objects.order_by('-pk').first().payload['text']
-        self.assertIn('Опубликован',changed);self.assertIn('Завершён',changed)
-        self.scan({'id':1000,'status':{'id':6,'name':'Опубликован'}})
-        self.assertEqual(StatusDelivery.objects.count(),3)
+
     def test_failed_check_keeps_last_status(self):
         watch=self.enable()
         AnnouncementWatch.objects.filter(pk=watch.pk).update(last_status='6',last_status_name='Опубликован',lease='test')
@@ -77,26 +76,26 @@ class StatusWatchTests(TestCase):
         self.assertContains(response,'Уведомления определяются этапом')
         self.assertFalse(Favorite.objects.filter(owner=self.other).exists())
     def test_delivery_not_repeated_and_not_sent_after_remove(self):
-        self.enable();self.scan({'id':1000,'status':{'id':6,'name':'Опубликован'}})
-        with patch('tender_search.core.status_monitor.in_work_hours',return_value=True),patch('tender_search.core.status_monitor.telegram_api',return_value={'message_id':3}) as api:
+        self.enable();self.scan({'id':1000,'status':{'id':6,'name':'Published'}})
+        self.scan({'id':1000,'status':{'id':10,'name':'Completed'}})
+        with patch('tender_search.core.status_monitor.telegram_api',return_value={'message_id':3}) as api:
             deliver_status_notifications();deliver_status_notifications();api.assert_called_once()
-        self.scan({'id':1000,'status':{'id':10,'name':'Завершён'}})
+        self.scan({'id':1000,'status':{'id':6,'name':'Published'}})
         Favorite.objects.filter(owner=self.owner,lot=self.lot).delete()
-        with patch('tender_search.core.status_monitor.in_work_hours',return_value=True),patch('tender_search.core.status_monitor.telegram_api',return_value={'message_id':4}) as api:
-            deliver_status_notifications();api.assert_called_once()
-            self.assertIn('Слежение отключено',api.call_args.args[1]['text'])
+        with patch('tender_search.core.status_monitor.telegram_api') as api:
+            deliver_status_notifications();api.assert_not_called()
+
     def test_status_check_and_confirmation_work_at_night(self):
-        watch=self.enable();AnnouncementWatch.objects.filter(pk=watch.pk).update(lease='test')
-        with patch('tender_search.core.status_monitor.in_work_hours',return_value=False),patch('tender_search.core.status_monitor.ZakupClient') as api,patch('tender_search.core.status_monitor.telegram_api') as send:
-            api.return_value.__enter__.return_value.announcement.return_value={'id':1000,'status':{'id':6,'name':'Опубликован'}}
-            send.return_value={'message_id':5}
+        watch=self.enable()
+        AnnouncementWatch.objects.filter(pk=watch.pk).update(lease='test',last_status='6',last_status_name='Published')
+        with patch('tender_search.core.status_monitor.in_work_hours',return_value=False),patch('tender_search.core.status_monitor.ZakupClient') as api,patch('tender_search.core.status_monitor.telegram_api',return_value={'message_id':5}) as send:
+            api.return_value.__enter__.return_value.announcement.return_value={'id':1000,'status':{'id':10,'name':'Completed'}}
             check_status(watch.pk,'test');deliver_status_notifications()
             api.assert_called_once();send.assert_called_once()
-            self.assertIn('Слежение включено',send.call_args.args[1]['text'])
+            self.assertIn('Completed',send.call_args.args[1]['text'])
             self.client.post(f'/lots/{self.lot.pk}/favorite/',{'action':'remove'})
-            deliver_status_notifications()
-            self.assertEqual(send.call_count,2)
-            self.assertIn('Слежение отключено',send.call_args.args[1]['text'])
+            deliver_status_notifications();self.assertEqual(send.call_count,1)
+
     def test_table_has_four_columns_and_actions_in_first(self):
         job=WebSearch.objects.create(owner=self.owner,specification={'terms':['ноут']},status='done')
         SearchHit.objects.create(search=job,lot=self.lot,terms=['ноут'])
@@ -116,14 +115,13 @@ class StatusWatchTests(TestCase):
         self.assertFalse(AnnouncementWatch.objects.get(owner=self.owner).enabled)
 
     def test_stop_confirmation_once_and_stale_stop_cancelled_after_reenable(self):
+        watch=self.enable()
+        self.client.post(f'/lots/{self.lot.pk}/favorite/',{'action':'remove'})
+        self.assertFalse(StatusDelivery.objects.exists())
+        StatusDelivery.objects.create(watch=watch,generation=watch.generation,event_key=f'{watch.pk}:{watch.generation}:stop',payload={})
         self.enable()
-        self.client.post(f'/lots/{self.lot.pk}/favorite/', {'action':'remove'})
-        self.client.post(f'/lots/{self.lot.pk}/favorite/', {'action':'remove'})
-        self.assertEqual(StatusDelivery.objects.filter(event_key__endswith=':stop').count(),1)
-        self.enable()
-        with patch('tender_search.core.status_monitor.in_work_hours',return_value=True),patch('tender_search.core.status_monitor.telegram_api') as api:
-            deliver_status_notifications()
-            api.assert_not_called()
+        with patch('tender_search.core.status_monitor.telegram_api') as api:
+            deliver_status_notifications();api.assert_not_called()
         self.assertEqual(StatusDelivery.objects.get().state,'cancelled')
 
     def test_favorite_sorting_and_added_column(self):

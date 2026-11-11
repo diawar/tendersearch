@@ -4,17 +4,24 @@
     <thead><tr><th>Лот и заказчик</th><th>Сумма, ₸</th><th>Даты заявки</th><th>Статус</th></tr></thead>
     <tbody><tr><td colspan="4">
       <div class="empty-results" role="status">
-        <img src="{% static 'core/empty-search.svg' %}" alt="" width="220" height="150">
         {% if pending %}
+          <div class="search-progress-art" data-search-start="{{ job.created_at|date:'U' }}" aria-hidden="true">
+            <img data-progress-frame src="{% static 'core/empty-search.svg' %}" alt="" width="220" height="150">
+            <img data-progress-frame src="{% static 'core/search-documents.svg' %}" alt="" width="220" height="150" hidden>
+            <img data-progress-frame src="{% static 'core/search-selection.svg' %}" alt="" width="220" height="150" hidden>
+            <div class="search-progress-dots"><i></i><i></i><i></i></div></div>
           <h2>Идёт поиск</h2>
           <p>Проверяем лоты по вашим условиям. Результаты появятся целиком, когда поиск завершится.</p>
         {% elif job.error %}
+          <img src="{% static 'core/empty-search.svg' %}" alt="" width="220" height="150">
           <h2>Поиск не завершён</h2>
           <p>Попробуйте запустить поиск ещё раз.</p>
         {% elif job.status == 'cancelled' %}
+          <img src="{% static 'core/empty-search.svg' %}" alt="" width="220" height="150">
           <h2>Поиск отменён</h2>
           <p>Сохранённых результатов нет. Вы можете запустить новый поиск.</p>
         {% else %}
+          <img src="{% static 'core/empty-search.svg' %}" alt="" width="220" height="150">
           <h2>Результаты поиска пусты</h2>
           <p>{% if initial_search %}Введите ключевые слова и запустите поиск закупок.{% else %}В проверенной базе совпадений нет. Попробуйте убрать исключения или расширить фильтры.{% endif %}</p>
         {% endif %}

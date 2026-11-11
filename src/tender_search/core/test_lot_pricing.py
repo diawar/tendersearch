@@ -25,6 +25,8 @@ class LotPricingTests(TestCase):
             CollectionLot.objects.create(profile=profile,lot=self.lot,stage='interesting')
 
     def test_gate_rejects_unknown_external_combined_and_conflicting_data(self):
+        from .workflow_state import update_workflow
+        for user in (self.owner,self.other):update_workflow(user.pk,self.lot.pk,stage='preparing')
         self.assertEqual(verified_pricing(self.lot)['quantity'],3)
         for system in [2,3,6,7,None]:
             self.lot.raw['system_id']=system
@@ -39,7 +41,7 @@ class LotPricingTests(TestCase):
         self.detail['is_combined']=False
         self.detail['plan_items']*=2;self.cache.rows=[self.detail];self.cache.save()
         self.assertIsNone(verified_pricing(self.lot))
-        self.assertEqual(self.client.post(self.endpoint,{'unit_gross':'116','vat_rate':'16'}).status_code,403)
+        self.assertEqual(self.client.post(self.endpoint,{'confirm_discount':'on','unit_gross':'116','vat_rate':'16'}).status_code,403)
         self.assertFalse(UserLotPrice.objects.exists())
 
     def test_unknown_method_source_and_missing_card_do_not_enable_entry(self):
@@ -67,20 +69,22 @@ class LotPricingTests(TestCase):
         self.assertEqual(calculate_price(Decimal('105'),Decimal('5'))['unit_net'],100)
 
     def test_application_price_is_private_and_locked_without_changing_favorites(self):
+        from .workflow_state import update_workflow
+        for user in (self.owner,self.other):update_workflow(user.pk,self.lot.pk,stage='preparing')
         self.assertEqual(self.client.get(self.endpoint).status_code,405)
-        response=self.client.post(self.endpoint,{'unit_gross':'1 160,00','vat_rate':'16','next':'/workspace/?profile=all'})
+        response=self.client.post(self.endpoint,{'confirm_discount':'on','unit_gross':'1 160,00','vat_rate':'16','next':'/workspace/?profile=all'})
         self.assertEqual(response.status_code,302)
         price=UserLotPrice.objects.get(owner=self.owner,lot=self.lot)
         self.assertEqual(price.unit_gross,1160)
-        page=self.client.get(f'/lots/{self.lot.pk}/')
+        page=self.client.get(f'/lots/{self.lot.pk}/preparation/')
         self.assertEqual(page.context['price_result']['unit_net'],1000)
         self.assertContains(page,'data-price-output="total_gross"')
         self.client.force_login(self.other)
-        other_page=self.client.get(f'/lots/{self.lot.pk}/')
+        other_page=self.client.get(f'/lots/{self.lot.pk}/preparation/')
         self.assertEqual(other_page.context['price_form']['unit_gross'].value(),'')
-        self.client.post(self.endpoint,{'unit_gross':'232','vat_rate':'16'})
+        self.client.post(self.endpoint,{'confirm_discount':'on','unit_gross':'232','vat_rate':'16'})
         price.refresh_from_db();self.assertEqual(price.unit_gross,1160)
-        self.assertEqual(self.client.post(self.endpoint,{'unit_gross':'','vat_rate':'16'}).status_code,403)
+        self.assertEqual(self.client.post(self.endpoint,{'confirm_discount':'on','unit_gross':'','vat_rate':'16'}).status_code,400)
         self.assertEqual(UserLotPrice.objects.get(owner=self.other).unit_gross,232)
         self.assertTrue(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
         self.assertTrue(AnnouncementWatch.objects.filter(owner=self.owner,enabled=True).exists())
@@ -88,11 +92,13 @@ class LotPricingTests(TestCase):
         self.client.logout();self.assertEqual(self.client.post(self.endpoint,{}).status_code,302)
 
     def test_invalid_prices_are_rejected_and_posted_rate_cannot_override_16(self):
+        from .workflow_state import update_workflow
+        for user in (self.owner,self.other):update_workflow(user.pk,self.lot.pk,stage='preparing')
         UserLotPrice.objects.create(owner=self.owner,lot=self.lot,unit_gross=116,vat_rate=16)
         for value in ['-1','0','NaN','Infinity','1e3','10.123','9'*21]:
-            response=self.client.post(self.endpoint,{'unit_gross':value,'vat_rate':'16'})
+            response=self.client.post(self.endpoint,{'confirm_discount':'on','unit_gross':value,'vat_rate':'16'})
             self.assertEqual(response.status_code,400,value)
-        self.assertEqual(self.client.post(self.endpoint,{'unit_gross':'116','vat_rate':'13'}).status_code,302)
+        self.assertEqual(self.client.post(self.endpoint,{'confirm_discount':'on','unit_gross':'116','vat_rate':'13'}).status_code,302)
         self.assertEqual(UserLotPrice.objects.get(owner=self.owner).vat_rate,16)
         self.assertEqual(UserLotPrice.objects.get(owner=self.owner).unit_gross,116)
 

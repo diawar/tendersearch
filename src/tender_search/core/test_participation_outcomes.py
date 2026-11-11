@@ -26,6 +26,12 @@ class CompletenessTests(SimpleTestCase):
         self.assertTrue(parse_lot_result(text.replace('Лот № 101-ЗЦП1','Лот № 101-ЗЦП1\nКоличество поданных заявок: 2',1),'100-1','101-ЗЦП1','111111111111').participants_complete)
         self.assertFalse(parse_lot_result(text.replace('Лот № 101-ЗЦП1','Лот № 101-ЗЦП1\nКоличество поданных заявок: 3',1),'100-1','101-ЗЦП1','111111111111').participants_complete)
 
+    def test_real_zcp_accepted_and_rejected_counts_must_both_match(self):
+        text=protocol(OTHER).replace('Лот № 101-ЗЦП1','Лот № 101-ЗЦП1\nЦеновые предложения потенциальных поставщиков, автоматически отклоненные веб-порталом: 0\nПотенциальными поставщиками представлены следующие ценовые предложения: 2',1)
+        self.assertTrue(parse_lot_result(text,'100-1','101-ЗЦП1','111111111111').participants_complete)
+        for changed in [text.replace('предложения: 2','предложения: 3'),text.replace('веб-порталом: 0','веб-порталом: 1'),text.replace('веб-порталом: 0','неизвестный формат')]:
+            self.assertFalse(parse_lot_result(changed,'100-1','101-ЗЦП1','111111111111').participants_complete)
+
 
 @override_settings(STORAGES={'default':{'BACKEND':'django.core.files.storage.FileSystemStorage'},'staticfiles':{'BACKEND':'django.contrib.staticfiles.storage.StaticFilesStorage'}})
 class ParticipationTests(TestCase):
@@ -82,3 +88,10 @@ class ParticipationTests(TestCase):
         enroll_participation_checks();state.refresh_from_db()
         self.assertFalse(state.result_tracking)
         self.assertFalse(LotOutcomeWatch.objects.get(owner=self.owner,lot=self.lot).enabled)
+
+
+    def test_unified_api_epz_announcement_with_verified_egz_lot(self):
+        self.lot.announcement.raw={'system':{'id':4,'name':'EPZ'}}
+        self.lot.announcement.save()
+        state=self.run_result(Outcome('won',BIN,'Our company'))
+        self.assertEqual(state.stage,'contract')

@@ -106,10 +106,13 @@ class ContractWorkflowTests(TestCase):
     def setUp(self):
         from .test_lot_pricing import LotPricingTests
         LotPricingTests.setUp(self)
-        self.client.post(self.endpoint,{'unit_gross':'116'})
+        # Contract evidence tests start after a confirmed win, independently of price entry.
+        from .models import UserLotPrice
+        UserLotPrice.objects.create(owner=self.owner,lot=self.lot,unit_gross=116,vat_rate=16,locked_at=timezone.now())
         CompanySettings.objects.update_or_create(owner=self.owner,defaults={'company_bin':'241040001415'})
         self.state=update_workflow(self.owner.pk,self.lot.pk,stage='won',outcome='won',result_tracking=True)
-        self.verdict=LotOutcomeWatch.objects.get(owner=self.owner,lot=self.lot)
+        from .outcome_service import register_watch
+        self.verdict=register_watch(self.owner.pk,self.lot.pk)
         self.verdict.state='won';self.verdict.company_bin='241040001415';self.verdict.winner_bin='241040001415'
         self.verdict.checked_at=timezone.now();self.verdict.save()
         self.watch=ContractWatch.objects.create(workflow=self.state,lease='test')
@@ -123,6 +126,8 @@ class ContractWorkflowTests(TestCase):
         self.state.refresh_from_db();self.watch.refresh_from_db()
 
     def test_confirmed_progress_and_archive_preserve_won_filter(self):
+        from .models import LotShipment
+        LotShipment.objects.create(owner=self.owner,lot=self.lot,act='private-acts/accepted.pdf')
         for target in ('contract','delivery','payment','paid'):
             self.run_check({'state':target,'number':'contract','status':'status'})
             self.assertEqual(self.state.stage,'archived' if target=='paid' else target)
@@ -133,6 +138,12 @@ class ContractWorkflowTests(TestCase):
         self.assertEqual(page.context['page'].paginator.count,1)
         with patch('tender_search.core.tasks.check_lot_contract.delay') as task:
             schedule_contracts();task.assert_not_called()
+
+    def test_payment_evidence_requires_attached_act(self):
+        for target in ('payment','paid'):
+            self.run_check({'state':target,'number':'contract','status':'status'})
+            self.assertEqual(self.state.stage,'delivery')
+            self.assertFalse(self.state.completed_at)
 
     def test_archive_during_request_fences_response(self):
         def archive(*args):
@@ -183,6 +194,7 @@ class ContractWorkflowTests(TestCase):
         self.assertEqual(self.state.stage,'won')
         self.assertContains(self.client.get('/workspace/',{'stage':'won'}),'Требуется проверка')
         self.client.force_login(self.other)
+        CompanySettings.objects.update_or_create(owner=self.other, defaults={'company_bin': ''})
         self.assertContains(self.client.get('/settings/'),'Укажите БИН организации')
         self.client.post('/settings/',{'action':'company','company_bin':'123456789012'})
         self.assertNotContains(self.client.get('/settings/'),'Укажите БИН организации')

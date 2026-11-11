@@ -1,4 +1,4 @@
-importScripts('draft.js','bridge-config.js');
+importScripts('draft.js','bridge-config.js','check.js');
 let running=false;
 let transferring=false;
 const key='draftJob';
@@ -16,6 +16,37 @@ const writeJob=async job=>{
  else if(job.createUncertain===false)await chrome.storage.local.remove(recoveryKey(job.packet));
  await chrome.storage.session.set({[key]:job});return job;
 };
+const retryAlarm='draft-recovery';
+const retryDelays=[1,2,4,8,15,15,15,15];
+async function waitRecovery(job,reason){
+ const current=await readJob();if(!current||current.stop)return;
+ const attempt=job.retryCount||0;
+ if(attempt>=retryDelays.length){await writeJob({...job,status:'blocked',message:'Предел автоматических повторов достигнут. '+reason});return;}
+ const nextRetryAt=Date.now()+retryDelays[attempt]*60000;
+ await writeJob({...job,status:'waiting',retryCount:attempt+1,nextRetryAt,
+  message:'Ожидание восстановления. Проверка '+(attempt+1)+'/'+retryDelays.length+' через '+retryDelays[attempt]+' мин. '+reason});
+ await chrome.alarms.create(retryAlarm,{when:nextRetryAt});
+ if((await readJob())?.stop)await chrome.alarms.clear(retryAlarm);
+}
+async function resumeRecovery(){
+ if(running||transferring)return;
+ const job=await readJob();if(!job||job.stop||job.status!=='waiting')return;
+ running=true;
+ try{
+  await writeJob({...job,status:'running',message:'Проверяем восстановление и существующий черновик…'});
+  await new Promise((resolve,reject)=>{
+   let timer;
+   const done=error=>{clearTimeout(timer);chrome.tabs.onUpdated.removeListener(listener);error?reject(error):resolve();};
+   const listener=(id,change)=>{if(id===job.tabId&&change.status==='complete')done();};
+   chrome.tabs.onUpdated.addListener(listener);
+   timer=setTimeout(()=>done(Error('Страница Госзакупа не загрузилась.')),30000);
+   chrome.tabs.update(job.tabId,{url:'https://zakup.gov.kz/cabinet/announcement/'+job.packet.announcement_external_id}).catch(done);
+  });
+  await runJob();
+ }catch(error){await waitRecovery(await readJob(),error.message);}
+ finally{running=false;}
+}
+chrome.alarms.onAlarm.addListener(alarm=>{if(alarm.name===retryAlarm)void resumeRecovery();});
 async function injected(job,action){
  const rows=await chrome.scripting.executeScript({target:{tabId:job.tabId},func:runDraftStep,
   args:[job.packet,action,{applicationNumber:job.number||'',lotConfirmed:job.lotConfirmed===true}]});
@@ -42,7 +73,9 @@ async function runJob(){
   for(let step=0;step<24;step++){
    let job=await readJob();if(!job||job.stop) return;
    const probe=await injected(job,'probe');
-   if(probe.blocked){await writeJob({...job,status:'blocked',message:probe.message});return;}
+   if((await readJob())?.stop)return;
+   if(probe.blocked){if(probe.retryable)await waitRecovery(job,probe.message);else await writeJob({...job,status:'blocked',message:probe.message});return;}
+   if(job.createUncertain&&!probe.number&&probe.next==='open_form'&&!probe.resuming){await waitRecovery(job,'Результат создания неизвестен. Проверяем существующий черновик; повторное создание запрещено.');return;}
    if((job.createUncertain||job.number)&&!probe.number&&probe.next==='save_account'){
     await writeJob({...job,status:'blocked',message:'Предыдущая попытка создания не подтверждена. Откройте объявление заново и продолжите существующую заявку; повторное создание отключено.'});return;
    }
@@ -54,7 +87,7 @@ async function runJob(){
    }
    if(!probe.next)throw Error('Не определён следующий шаг. Продолжите вручную.');
    const current=await readJob();if(current?.stop)return;
-   job={...job,status:'running',intent:probe.next,message:probe.message,
+   job={...job,status:'running',intent:probe.next,phase:({open_form:'portal',fill_account:'account',save_account:'account',add_lot:'lot',advance_lots:'lot',open_description:'description',edit_description:'description',fill_description:'description',save_description:'description'})[probe.next]||job.phase||'portal',message:probe.message,
     createUncertain:job.createUncertain||(probe.next==='save_account'&&!job.number)};
    await writeJob(job); // Durable intent before any portal action.
    const result=await injected(job,probe.next);
@@ -63,12 +96,15 @@ async function runJob(){
    if(probe.next==='save_account'&&!job.number&&result.blocked&&result.uncertain===false)job.createUncertain=false;
    if(result.number){job.number=result.number;job.createUncertain=false;}
    if(result.lotConfirmed)job.lotConfirmed=true;
+   if(result.state==='draft_created')job.phase='lot';
+   if(['documents_opened','description_opened','description_ready'].includes(result.state))job.phase='description';
    if(result.navigate){
     job={...job,status:'running',message:result.message,intent:'open_form'};await writeJob(job);
     await navigatePortal(job,result.navigate);
     const current=await readJob();if(current?.stop)return;
    }
    const stopped=(await readJob())?.stop;
+   if(!stopped&&result.blocked&&result.retryable){await waitRecovery(job,result.message);return;}
    job={...job,stop:Boolean(stopped),status:stopped?'paused':result.blocked?'blocked':result.state==='complete'?'complete':'running',
     message:result.message,intent:result.blocked?job.intent:'',observedAt:new Date().toISOString()};
    await writeJob(job);
@@ -76,32 +112,43 @@ async function runJob(){
   }
   const job=await readJob();if(job)await writeJob({...job,status:'paused',message:'Достигнут предел шагов. Проверьте форму и продолжите.'});
  }catch(error){
-  const job=await readJob();if(job)await writeJob({...job,status:'blocked',message:error.message});
+  const job=await readJob();if(job&&!job.stop){if(/Frame.*removed|document.*unloaded|message port closed|Cannot access contents|Переход ещё не завершился|Ответ страницы не получен/i.test(error.message))await waitRecovery(job,error.message);else await writeJob({...job,status:'blocked',message:error.message});}
  }finally{running=false;}
 }
 async function command(message){
  if(transferring&&['draft:load','draft:start','draft:clear'].includes(message.type))throw Error('Дождитесь завершения передачи из приложения.');
  if(message.type==='draft:get'){
   const job=await readJob();
-  if(job?.status==='running'&&!running)return writeJob({...job,status:'paused',message:'Фоновая обработка прервалась. Проверьте портал перед продолжением.'});
+  if(job?.status==='running'&&!running){await waitRecovery(job,'Обработка прервалась. Перед продолжением проверим существующий черновик.');return readJob();}
+  if(job?.status==='waiting'&&job.nextRetryAt)await chrome.alarms.create(retryAlarm,{when:Math.max(Date.now()+1000,job.nextRetryAt)});
   return job;
  }
  if(message.type==='draft:load'){
-  if(running)throw Error('Сначала остановите текущее заполнение.');
+  if(running||(await readJob())?.status==='waiting')throw Error('Сначала остановите текущее заполнение.');
   validateDraftPacket(message.packet);
   const old=await readJob();
   if(old?.createUncertain)throw Error('Есть неподтверждённая попытка создания. Проверьте её на портале перед очисткой подготовки.');
   return writeJob({packet:message.packet,status:'ready',message:'Подготовка загружена. Откройте нужное объявление.',...await recovery(message.packet),lotConfirmed:false});
  }
  if(message.type==='draft:stop'){
+  await chrome.alarms.clear(retryAlarm);
   const job=await readJob();return job?writeJob({...job,stop:true,status:'paused',message:'Остановка запрошена. Текущий шаг может завершиться; следующие шаги отключены.'}):null;
+ }
+ if(message.type==='draft:confirm-absent'){
+  if(running||transferring)throw Error('Сначала остановите заполнение и дождитесь завершения текущего шага.');
+  const job=await readJob();
+  if(!job||!['paused','blocked','ready'].includes(job.status)||!job.createUncertain||job.number||job.packet.existing_application_number)throw Error('Сначала остановите ожидание. Сброс доступен только для неподтверждённой попытки без номера заявки.');
+  if(message.announcement_number!==job.packet.announcement_number||message.lot_number!==job.packet.lot_number||message.company_bin!==job.packet.company_bin)throw Error('Подготовка изменилась. Откройте расширение заново.');
+  await chrome.alarms.clear(retryAlarm);
+  return writeJob({...job,createUncertain:false,retryCount:0,nextRetryAt:null,intent:'',message:'Вы подтвердили отсутствие черновика в «Моих заявках». Вернитесь в очередь и нажмите «Запустить очередь».'});
  }
  if(message.type==='draft:clear'){
   if(running)throw Error('Дождитесь остановки текущего шага.');
+  await chrome.alarms.clear(retryAlarm);
   await chrome.storage.session.remove(key);return null;
  }
  if(message.type==='draft:start'){
-  if(running)throw Error('Заполнение уже выполняется.');
+  if(running||(await readJob())?.status==='waiting')throw Error('Заполнение или ожидание уже выполняется.');
   let job=await readJob();validateDraftPacket(job?.packet);
   const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
   const url=new URL(tab?.url||'');
@@ -124,29 +171,83 @@ async function receivePreparation(message,sender){
  if(running||transferring)throw Error('Сначала завершите или остановите текущее заполнение в расширении.');
  transferring=true;
  try{
+  if((await readJob())?.status==='waiting')throw Error('Сначала остановите ожидание восстановления.');
   if(JSON.stringify(message.packet).length>50000)throw Error('Слишком большой пакет подготовки.');
   validateDraftPacket(message.packet);
   const old=await readJob();
-  if(old?.createUncertain)throw Error('Проверьте на портале предыдущую неподтверждённую попытку создания черновика.');
+  if(old?.createUncertain&&(old.packet.company_bin!==message.packet.company_bin||old.packet.lot_number!==message.packet.lot_number||old.packet.announcement_number!==message.packet.announcement_number))throw Error('Проверьте на портале предыдущую неподтверждённую попытку создания черновика.');
   const packet=message.packet;
   const queue=message.queue_context;
+  if(message.auto_start===true&&!queue)throw Error('Автозапуск доступен только из очереди.');
   if(queue&&(!Number.isSafeInteger(queue.id)||queue.id<1||!/^[-a-f0-9]{36}$/.test(queue.generation)||new URL(sender.url).pathname!=='/workspace/drafts/'))throw Error('Некорректный пункт очереди.');
-  const same=old?.packet?.company_bin===packet.company_bin&&old?.packet?.announcement_number===packet.announcement_number&&old?.packet?.lot_number===packet.lot_number;
+  if(packet.reset_absent_application!==undefined){
+   if(!queue||!/^\d{1,30}$/.test(packet.reset_absent_application)||packet.existing_application_number)throw Error('Сброс старого номера не подтверждён очередью.');
+   const record=await recovery(packet);
+   if(record.createUncertain)throw Error('Есть неподтверждённая попытка создания. Проверьте её отдельно.');
+   if(record.number===packet.reset_absent_application)await chrome.storage.local.remove(recoveryKey(packet));
+  }
+  const same=!packet.reset_absent_application&&old?.packet?.company_bin===packet.company_bin&&old?.packet?.announcement_number===packet.announcement_number&&old?.packet?.lot_number===packet.lot_number;
   await writeJob({packet,status:'ready',message:'Подготовка получена из приложения. Нажмите «Создать / продолжить черновик» на вкладке Госзакупа.',
    ...await recovery(packet),number:(same?old.number:'')||(await recovery(packet)).number,lotConfirmed:same&&old.lotConfirmed===true,appOrigin:new URL(sender.url).origin,queue_context:queue||null});
   let opened=false;
-  try{await chrome.tabs.create({url:'https://zakup.gov.kz/cabinet/announcement/'+packet.announcement_external_id});opened=true;}catch{}
+  try{
+   const tab=await chrome.tabs.create({url:'https://zakup.gov.kz/cabinet/announcement/'+packet.announcement_external_id});opened=true;
+   if(message.auto_start===true){
+    running=true;
+    await writeJob({...await readJob(),tabId:tab.id,stop:false,status:'running',message:'Открываем объявление…'});
+    void (async()=>{
+     try{
+      await new Promise((resolve,reject)=>{
+       const timer=setTimeout(()=>{chrome.tabs.onUpdated.removeListener(listener);reject(Error('Страница Госзакупа не загрузилась. Продолжите очередь после проверки сайта.'));},30000);
+       const listener=(id,change)=>{if(id===tab.id&&change.status==='complete'){clearTimeout(timer);chrome.tabs.onUpdated.removeListener(listener);resolve();}};
+       chrome.tabs.onUpdated.addListener(listener);
+       chrome.tabs.get(tab.id).then(current=>{if(current.status==='complete')listener(tab.id,{status:'complete'});},reject);
+      });
+      await runJob();
+     }catch(error){const job=await readJob();if(job)await waitRecovery(job,error.message);}
+     finally{running=false;}
+    })();
+   }
+  }catch(error){if(message.auto_start===true){running=false;throw error;}}
   try{await chrome.action.setBadgeText({text:'1'});await chrome.action.setBadgeBackgroundColor({color:'#087ee5'});}catch{}
   return {prepared:true,opened};
  }finally{transferring=false;}
 }
 chrome.runtime.onMessage.addListener((message,sender,respond)=>{
+ if(message?.type==='bridge:queue-check'){
+  if(!trustedPreparationSender(sender)||new URL(sender.url).pathname!=='/workspace/drafts/')return false;
+  (async()=>{
+   if(running||transferring||['running','waiting'].includes((await readJob())?.status))throw Error('Сначала остановите заполнение очереди.');
+   transferring=true;
+   try{
+    const t=message.target;
+    if(!t||!/^\d{12}$/.test(t.company_bin)||!/^\d{6,}-\d+$/.test(t.announcement_number)||!/^\d+-[А-Яа-яA-Za-z0-9]+$/.test(t.lot_number)||!/^\d{1,30}$/.test(t.number))throw Error('Некорректные данные проверки.');
+    const tab=await chrome.tabs.create({url:'https://zakup.gov.kz/cabinet/purchase/my-applications'});
+    await new Promise((resolve,reject)=>{
+     const done=error=>{clearTimeout(timer);chrome.tabs.onUpdated.removeListener(listener);error?reject(error):resolve();};
+     const listener=(id,change)=>{if(id===tab.id&&change.status==='complete')done();};
+     const timer=setTimeout(()=>done(Error('Кабинет не загрузился.')),30000);chrome.tabs.onUpdated.addListener(listener);
+     chrome.tabs.get(tab.id).then(current=>{if(current.status==='complete')done();},done);
+    });
+    const results=await chrome.scripting.executeScript({target:{tabId:tab.id},func:checkSavedApplication,args:[t]});
+    if(results.length!==1||!results[0].result)throw Error('Ответ проверки не получен.');
+    return {result:results[0].result};
+   }finally{transferring=false;}
+  })().then(respond,error=>respond({error:error.message}));return true;
+ }
+ if(message?.type==='bridge:queue-stop'){
+  if(!trustedPreparationSender(sender)||new URL(sender.url).pathname!=='/workspace/drafts/')return false;
+  readJob().then(job=>{
+   if(job?.appOrigin!==new URL(sender.url).origin)throw Error('Очередь другого приложения.');
+   return command({type:'draft:stop'});
+  }).then(()=>respond({stopped:true}),error=>respond({error:error.message}));return true;
+ }
  if(message?.type==='bridge:queue-status'){
   if(!trustedPreparationSender(sender)||new URL(sender.url).pathname!=='/workspace/drafts/')return false;
   command({type:'draft:get'}).then(job=>{
    if(!job?.queue_context||job.appOrigin!==new URL(sender.url).origin){respond({snapshot:null});return;}
    respond({queue_context:job.queue_context,snapshot:{status:job.status,number:job.number||'',message:job.message||'',
-    company_bin:job.packet.company_bin,announcement_number:job.packet.announcement_number,lot_number:job.packet.lot_number,
+    intent:job.intent||'',phase:job.phase||'',company_bin:job.packet.company_bin,announcement_number:job.packet.announcement_number,lot_number:job.packet.lot_number,
     lotConfirmed:job.lotConfirmed===true,description_saved:job.status==='complete',observed_at:job.observedAt||null}});
   },error=>respond({error:error.message}));return true;
  }

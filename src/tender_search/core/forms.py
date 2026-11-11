@@ -26,9 +26,11 @@ class SearchForm(forms.Form):
     amount_min = forms.DecimalField(label="Сумма от, ₸", required=False, min_value=0, max_digits=18, decimal_places=2)
     amount_max = forms.DecimalField(label="Сумма до, ₸", required=False, min_value=0, max_digits=18, decimal_places=2)
     only_advance = forms.BooleanField(label="Только с авансом", required=False, initial=False)
+    in_documents = forms.BooleanField(label="Искать также в техспецификациях", required=False)
     only_medical = forms.BooleanField(label="Закупки по медицине (med.ecc.kz, fms.ecc.kz)", required=False, initial=False)
     subject = forms.ChoiceField(label="Предмет закупки", required=False, initial="",
         choices=[("", "Все"), ("1", "Товары"), ("2", "Работы"), ("3", "Услуги")], widget=forms.RadioSelect)
+    remaining_hours = forms.ChoiceField(label="До окончания приёма", required=False, initial="", choices=[("", "Все сроки"), ("48", "До 48 часов"), ("24", "До 24 часов")], widget=forms.RadioSelect)
     deadline_from = forms.DateField(label="Приём заявок до — начиная с", required=False, widget=forms.DateInput(attrs={"type": "date"}))
     deadline_to = forms.DateField(label="Приём заявок до — по", required=False, widget=forms.DateInput(attrs={"type": "date"}))
     status = forms.MultipleChoiceField(label="Статус лота", required=False, widget=forms.CheckboxSelectMultiple)
@@ -111,8 +113,12 @@ class SearchForm(forms.Form):
             filters["delivery_address_id__in"] = "__".join(dict.fromkeys(addresses))
         if data.get("number"):
             filters[data["number_kind"]] = data["number"].strip()
+        if data.get("remaining_hours"):
+            filters["remaining_hours"] = int(data["remaining_hours"])
         if data.get("only_advance"):
             filters["only_advance"] = True
+        if data.get("in_documents"):
+            filters["in_documents"] = True
         if data.get("only_medical"):
             filters["only_medical"] = True
         if data.get("subject"):
@@ -123,14 +129,28 @@ class SearchForm(forms.Form):
 
 
 class CompanySettingsForm(forms.Form):
+    is_vat_payer = forms.TypedChoiceField(label='Работаем с НДС', choices=[('True','Да, плательщик НДС'),('False','Нет, без НДС')], coerce=lambda value: value == 'True', initial=True)
     company_bin = forms.RegexField(label='БИН компании', regex=r'^[0-9]{12}$', required=False,
         max_length=12, min_length=12, widget=forms.TextInput(attrs={'inputmode':'numeric','autocomplete':'off','placeholder':'12 цифр'}),
         error_messages={'invalid':'БИН должен содержать ровно 12 цифр.'},
         help_text='Используется для сравнения с победителем лота в действующем протоколе итогов.')
     company_name = forms.CharField(label='Полное название организации',max_length=500,required=False)
     taxpayer_type = forms.ChoiceField(label='Тип налогоплательщика на Госзакупе',choices=TAXPAYER_TYPES,required=False)
-    legal_address = forms.CharField(label='Юридический адрес',max_length=1000,required=False,widget=forms.Textarea(attrs={'rows':2}),
-        help_text='Скопируйте адрес целиком из выпадающего списка Госзакупа, включая код и обозначения портала.')
+    address_city = forms.CharField(label='Город / населённый пункт',max_length=200,required=False)
+    address_street = forms.CharField(label='Улица',max_length=300,required=False)
+    address_house = forms.CharField(label='Номер дома / корпус',max_length=50,required=False)
+    address_office = forms.CharField(label='Офис / помещение',max_length=50,required=False,
+        help_text='Необязательно. Укажите номер с буквой, если она есть: например, 25Б.')
+    legal_address = forms.CharField(max_length=1000,required=False,widget=forms.HiddenInput)
+
+    def clean(self):
+        data=super().clean()
+        if self._structured_address_posted and any(data.get('address_'+key) for key in ('city','street','house','office')):
+            for key in ('city','street','house'):
+                if not data.get('address_'+key):self.add_error('address_'+key,'Заполните поле адреса.')
+            data['legal_address']=', '.join(data.get('address_'+key,'') for key in ('city','street','house','office') if data.get('address_'+key))
+        return data
+
     bank_account = forms.RegexField(label='Банковский счёт (ИИК)',regex=r'^KZ[0-9A-Z]{18}$',max_length=20,required=False,
         error_messages={'invalid':'Укажите ИИК: KZ и ещё 18 букв или цифр.'})
     bank_name = forms.CharField(label='Название банка',max_length=200,required=False)
@@ -142,8 +162,13 @@ class CompanySettingsForm(forms.Form):
 
     def __init__(self,*args,**kwargs):
         bound=args[0] if args else kwargs.get('data')
+        self._structured_address_posted = bound is not None and any('address_'+key in bound for key in ('city','street','house','office'))
         if bound is not None:
             values=bound.copy()
+            initial=kwargs.get('initial') or {}
+            for key,value in initial.items():
+                if key not in values:values[key]=str(value) if key=='is_vat_payer' else value
+            if 'is_vat_payer' not in values:values['is_vat_payer']='True'
             for key in ('bank_account','bank_bic'):
                 if key in values:values[key]=values[key].strip().replace(' ','').upper()
             if args:args=(values,*args[1:])

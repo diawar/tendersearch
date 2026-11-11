@@ -15,13 +15,7 @@ def cancel_watch(owner_id, announcement_id):
     with transaction.atomic():
         watches=list(AnnouncementWatch.objects.select_for_update().filter(owner_id=owner_id,announcement_id=announcement_id).select_related('announcement','lot'))
         for watch in watches:
-            StatusDelivery.objects.filter(watch=watch,state='pending').exclude(event_key__endswith=':stop').update(state='cancelled')
-            if watch.enabled:
-                payload=status_payload(watch)
-                title=escape(str(watch.announcement.name or watch.lot.name)[:700])
-                number=escape(str(watch.announcement.number or watch.lot.number)[:100])
-                payload['text']=f'🔕 <b>Слежение отключено</b>\n<code>{number}</code>\n\n<b>{title}</b>\n\nУведомления об изменении статуса этого объявления отключены. Слежение определяется этапом лота в рабочем пространстве.'
-                StatusDelivery.objects.get_or_create(event_key=f'{watch.pk}:{watch.generation}:stop',defaults={'watch':watch,'generation':watch.generation,'payload':payload})
+            StatusDelivery.objects.filter(watch=watch,state='pending').update(state='cancelled')
             watch.enabled=False;watch.lease='';watch.lease_until=None
             watch.save(update_fields=['enabled','lease','lease_until','updated_at'])
 
@@ -36,15 +30,12 @@ def status_value(card):
     return identity,name
 
 
-def status_payload(watch, old_name=None):
+def status_payload(watch, old_name):
     a,lot=watch.announcement,watch.lot
     esc=lambda value,length:escape(str(value or '')[:length])
     title=esc(a.name or lot.name,700)
     number=esc(a.number or lot.number,100)
-    if old_name is None:
-        body=f'👁 <b>Слежение включено</b>\n<code>{number}</code>\n\n<b>{title}</b>\n\n📍 Текущий статус: <b>{esc(watch.last_status_name,300)}</b>\n\nБудем проверять статус ежедневно. Сообщим только об изменениях.'
-    else:
-        body=f'🔄 <b>Изменился статус объявления</b>\n<code>{number}</code>\n\n<b>{title}</b>\n\nБыло: {esc(old_name,300)}\nСтало: <b>{esc(watch.last_status_name,300)}</b>\n\n🕒 {timezone.now().astimezone(ALMATY).strftime("%d.%m.%Y %H:%M")} · Алматы'
+    body=f'🔄 <b>Изменился статус объявления</b>\n<code>{number}</code>\n\n<b>{title}</b>\n\nБыло: {esc(old_name,300)}\nСтало: <b>{esc(watch.last_status_name,300)}</b>\n\n🕒 {timezone.now().astimezone(ALMATY).strftime("%d.%m.%Y %H:%M")} · Алматы'
     url=lot.portal_url
     return {'text':body,'parse_mode':'HTML','link_preview_options':{'is_disabled':True},'reply_markup':{'inline_keyboard':[[{'text':('Открыть на госзакупе ↗' if lot.announcement.source == 'zakup' else f'Открыть на {lot.portal_label} ↗'),'url':url}]]}}
 
@@ -79,7 +70,6 @@ def check_status(watch_id, lease):
             if not current.enabled or current.lease!=lease or current.generation!=watch.generation:return
             if not Favorite.objects.filter(owner=current.owner,lot=current.lot).exists():
                 cancel_watch(current.owner_id,current.announcement_id);return
-            initial=not current.last_status
             changed=bool(current.last_status) and current.last_status!=identity
             old_name=current.last_status_name
             current.last_status,current.last_status_name=identity,name
@@ -89,9 +79,9 @@ def check_status(watch_id, lease):
             current.next_check_at=tomorrow.replace(hour=7,minute=0,second=0,microsecond=0)
             current.error='';current.save()
             Announcement.objects.filter(pk=current.announcement_id).update(status=name,raw=card,checked_at=timezone.now())
-            if initial or changed:
-                key=f'{current.pk}:{current.generation}:{"start" if initial else current.revision}'
-                StatusDelivery.objects.get_or_create(event_key=key,defaults={'watch':current,'generation':current.generation,'payload':status_payload(current,None if initial else old_name)})
+            if changed:
+                key=f'{current.pk}:{current.generation}:{current.revision}'
+                StatusDelivery.objects.get_or_create(event_key=key,defaults={'watch':current,'generation':current.generation,'payload':status_payload(current,old_name)})
     except Exception as exc:
         AnnouncementWatch.objects.filter(pk=watch_id,lease=lease).update(error=str(exc)[:200] if isinstance(exc,SourceError) else 'Не удалось проверить статус. Повторим позже.',next_check_at=timezone.now()+timedelta(hours=1))
     finally:
@@ -102,14 +92,16 @@ def deliver_status_notifications():
     if not settings.TELEGRAM_BOT_TOKEN:return
     now=timezone.now()
     StatusDelivery.objects.filter(state='sending',updated_at__lt=now-timedelta(minutes=5)).update(state='uncertain',error='Доставка не подтверждена; повтор отключён.')
-    deliveries=StatusDelivery.objects.filter(state='pending',watch__owner__is_active=True).filter(Q(watch__enabled=True)|Q(event_key__endswith=':stop')).filter(Q(retry_at__isnull=True)|Q(retry_at__lte=now)).select_related('watch')
+    deliveries=StatusDelivery.objects.filter(state='pending',watch__owner__is_active=True).filter(Q(retry_at__isnull=True)|Q(retry_at__lte=now)).select_related('watch')
     for delivery in deliveries[:20]:
         watch=delivery.watch
-        is_stop=delivery.event_key.endswith(':stop')
-        if delivery.generation!=watch.generation or (not is_stop and (not watch.enabled or not Favorite.objects.filter(owner_id=watch.owner_id,lot_id=watch.lot_id).exists())):
+        if (delivery.event_key.endswith((':start',':stop')) or delivery.generation!=watch.generation or
+                not watch.enabled or not Favorite.objects.filter(owner_id=watch.owner_id,lot_id=watch.lot_id).exists()):
             StatusDelivery.objects.filter(pk=delivery.pk).update(state='cancelled');continue
         sub=TelegramSubscription.objects.filter(owner_id=watch.owner_id,enabled=True,chat_id__isnull=False).first()
-        if not sub:continue
+        if not sub:
+            StatusDelivery.objects.filter(pk=delivery.pk,state='pending').update(state='cancelled')
+            continue
         if not StatusDelivery.objects.filter(pk=delivery.pk,state='pending').update(state='sending',updated_at=timezone.now()):continue
         try:
             result=telegram_api('sendMessage',dict(delivery.payload,chat_id=sub.chat_id))
@@ -118,5 +110,8 @@ def deliver_status_notifications():
             if exc.code==429:
                 StatusDelivery.objects.filter(pk=delivery.pk).update(state='pending',retry_at=timezone.now()+timedelta(seconds=max(1,exc.retry_after)),error='Лимит Telegram.')
                 return
-            if exc.code==403:TelegramSubscription.objects.filter(pk=sub.pk).update(enabled=False)
+            if exc.code==403:
+                TelegramSubscription.objects.filter(pk=sub.pk).update(enabled=False)
+                from .workflow_notifications import cancel_pending
+                cancel_pending(watch.owner_id)
             StatusDelivery.objects.filter(pk=delivery.pk).update(state='uncertain' if exc.code==0 else 'error',error=f'Telegram: {exc.code}')

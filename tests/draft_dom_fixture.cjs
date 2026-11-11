@@ -15,6 +15,12 @@ function check(value,message){if(!value)throw Error(message);}
 const apply='/cabinet/purchase/announcements/17920228/apply';
 async function tests(){
  let clicks=0;
+ page('<p>Загрузка…</p>','/cabinet/announcement/17920228');
+ setTimeout(()=>root.insertAdjacentHTML('beforeend','<h1>Объявление №17920228-1</h1><button>Подать заявку</button>'),300);
+ const delayed=await run(packet);check(delayed.next==='open_form','late announcement content awaited');
+ page('<p>Загрузка…</p>','/cabinet/announcement/17920228');
+ const unloaded=await run(packet);check(unloaded.blocked&&unloaded.retryable&&unloaded.uncertain===false,'unloaded announcement retried without creation');
+
  page('<p>17920228-1</p><button>Подать заявку</button>','/cabinet/announcement/17920228');
  let r=await run(packet);check(r.next==='open_form','announcement probe');
  root.querySelector('header').append(document.createTextNode(' БИН: '+packet.company_bin));
@@ -56,8 +62,8 @@ async function tests(){
  page('<p>88537093-ЗЦП1</p>'+input('Наименование товара')+input('Завод-изготовитель')+'<div class="ant-form-item"><label>Страна происхождения</label><div class="ant-select-selector"><span class="ant-select-selection-item">Китай</span><input role="combobox"></div></div><button>Сохранить</button>',apply+'/product-description/42');
  fixtureLocation.href+='?id=123&step=3';
  const registryTwo={...packet,position_count:2,repeat_product:true};
- r=await run(registryTwo);check(r.next==='fill_description'&&/одна позиция/.test(r.message),'two registry entries can map to one complete portal group with consent');
- r=await run({...registryTwo,repeat_product:false});check(r.blocked,'same-product consent remains mandatory');
+ r=await run(registryTwo);check(r.next==='fill_description','two registry entries can map to one complete portal group with consent');
+ r=await run({...registryTwo,repeat_product:false});check(!r.blocked,'repeated registry rows do not require consent');
  const summary=document.createElement('dl');summary.innerHTML='<dt>Номер лота</dt><dd>11111111-ЗЦП1</dd>';root.append(summary);
  r=await run(registryTwo);check(r.blocked,'wrong form summary blocks even if target number exists elsewhere');summary.remove();
  const countryLabel=[...root.querySelectorAll('label')].find(el=>el.textContent==='Страна происхождения');countryLabel.textContent='Другой параметр';
@@ -66,7 +72,7 @@ async function tests(){
  check(document.querySelector('input').value===packet.data.product_name,'product filled');
  r=await run(packet);check(r.next==='save_description','description ready');
  document.querySelector('button').onclick=()=>{const toast=document.createElement('div');toast.className='ant-notification-notice-success';toast.textContent='Описание сохранено';document.body.append(toast);};
- r=await run(registryTwo,'save_description');check(r.state==='complete'&&r.number==='123'&&/одна позиция/.test(r.message),'single portal group save confirmed for two registry entries');
+ r=await run(registryTwo,'save_description');check(r.state==='complete'&&r.number==='123','single portal group save confirmed for two registry entries');
  document.querySelector('input').value='Другая модель';r=await run(packet,'fill_description');check(r.blocked,'existing content protected');
  r=await run(packet,'probe',{applicationNumber:'999'});check(r.blocked,'other application blocked');
  page('<h3>Документация</h3>',apply);fixtureLocation.href+='?id=123&step=3';
@@ -94,9 +100,9 @@ async function tests(){
  page('<p>88537093-ЗЦП1</p>'+input('Наименование товара')+input('Завод-изготовитель')+combo('Страна происхождения','Китай')+input('Наименование товара')+input('Завод-изготовитель')+combo('Страна происхождения','Китай')+'<button>Сохранить</button>',apply+'/product-description/42');
  fixtureLocation.href+='?id=123&step=3';
  r=await run(packet,'fill_description');check(r.blocked,'unexpected multiple positions blocked');
- r=await run({...packet,position_count:2,repeat_product:true},'fill_description');check(!r.blocked,'explicit multi-position fill');
+ r=await run({...packet,position_count:2,repeat_product:true},'fill_description');check(r.blocked,'legacy consent cannot permit multi-position fill');
  const productFields=[...document.querySelectorAll('.ant-form-item')].filter(el=>el.querySelector('label').textContent==='Наименование товара');
- check(productFields.every(el=>el.querySelector('input').value===packet.data.product_name),'all consented product positions filled');
+ check(productFields.every(el=>el.querySelector('input').value===''),'multiple product positions remain untouched');
  // Current portal Select DOM: no .ant-select-selector or .ant-select-selection-item.
  const modern=label=>'<div class="ant-form-item"><label>'+label+'</label><div class="ant-select"><div class="ant-select-content"><input role="combobox" style="width:0;padding:0;border:0"></div></div></div>';
  page(modern('Юридический адрес')+modern('Банковский счёт')+input('Контактный телефон')+'<button>Далее</button>',apply);
@@ -128,6 +134,8 @@ async function tests(){
  };
  r=await run({...packet,data:{...packet.data,taxpayer_type:'Юридическое лицо'}},'fill_account');check(!r.blocked,'taxpayer choice filled');
  r=await run({...packet,data:{...packet.data,taxpayer_type:'Юридическое лицо'}});check(r.next==='save_account','taxpayer ready before create');taxpayer.remove();
+ const outage=document.createElement('div');outage.className='ant-alert-error';outage.textContent='При попытке обновления регистрационных данных возникла ошибка, сервис Комитета государственных доходов недоступен';root.append(outage);
+ r=await run(packet,'save_account');check(r.blocked&&r.retryable&&r.uncertain===false,'KGD outage refuses before create click and can be retried');outage.remove();
  const currentAddress=root.querySelector('.ant-select-content-has-value');currentAddress.firstChild.textContent='Другой адрес';
  r=await run(packet,'fill_account');check(r.blocked,'different selected value not overwritten');
  currentAddress.classList.remove('ant-select-content-has-value');currentAddress.firstChild.remove();currentAddress.querySelector('input').value=packet.data.legal_address;

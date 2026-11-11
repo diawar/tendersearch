@@ -1,5 +1,5 @@
 from tender_search.core import collection_views
-from tender_search.core import draft_queue
+from tender_search.core import draft_queue, shipping
 from django.contrib import admin
 from django.contrib.auth import views as auth_views
 from django.urls import path, re_path
@@ -13,8 +13,13 @@ from tender_search.core.extension_views import download_extension, receive_exten
 from tender_search.core.preparation import prepare_application, export_preparation, import_portal_status
 
 urlpatterns = [
+    path('lots/<int:lot_id>/shipment/', shipping.save, name='shipment_save'),
+    path('lots/<int:lot_id>/shipment/act/', shipping.upload_act, name='shipment_act'),
+    path('lots/<int:lot_id>/shipment/act/download/', shipping.download_act, name='shipment_act_download'),
     path('workspace/drafts/', draft_queue.queue, name='draft_queue'),
     path('workspace/drafts/add/', draft_queue.enqueue, name='draft_queue_add'),
+    path('workspace/drafts/<int:item_id>/restart/', draft_queue.restart, name='draft_queue_restart'),
+    path('workspace/drafts/<int:item_id>/check/', draft_queue.check_portal, name='draft_queue_check'),
     path('workspace/drafts/<int:item_id>/packet/', draft_queue.packet, name='draft_queue_packet'),
     path('workspace/drafts/<int:item_id>/progress/', draft_queue.progress, name='draft_queue_progress'),
     path('workspace/drafts/<int:item_id>/cancel/', draft_queue.cancel, name='draft_queue_cancel'),
@@ -37,7 +42,6 @@ urlpatterns = [
     path("lots/<int:lot_id>/specification/", views.lot_specification_extract, name="lot_specification_extract"),
     path("lots/<int:lot_id>/status/", views.lot_detail_status, name="lot_detail_status"),
     path("lots/<int:lot_id>/price/", views.lot_price_save, name="lot_price_save"),
-    path("lots/<int:lot_id>/application/cancel/", views.lot_application_cancel, name="lot_application_cancel"),
     path("lots/<int:lot_id>/note/", views.lot_note_save, name="lot_note_save"),
     path("lots/<int:lot_id>/refresh/", views.lot_refresh, name="lot_refresh"),
     path("lots/<int:lot_id>/favorite/", views.favorite, name="favorite"),

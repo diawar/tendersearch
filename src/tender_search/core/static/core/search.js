@@ -107,8 +107,8 @@ document.addEventListener('click',event=>{
  const button=event.target.closest('[data-condition-field]');if(!button)return;
  const form=document.querySelector('#procurement-search-form');if(!form)return;
  const field=button.dataset.conditionField,value=button.dataset.conditionValue;
- if(field==='subject'){
-  const all=form.querySelector('input[name="subject"][value=""]');
+ if(field==='subject'||field==='remaining_hours'){
+  const all=form.querySelector('input[name="'+field+'"][value=""]');
   if(all){all.checked=true;all.dispatchEvent(new Event('change',{bubbles:true}));}
   const hint=document.querySelector('.conditions-changed');if(hint)hint.hidden=false;
   return;
@@ -162,6 +162,7 @@ if(conditionsForm&&liveConditions){
   }
   if(conditionsForm.elements.namedItem('only_advance')?.checked)add('Только с авансом','only_advance','on','condition-procurement');
   if(conditionsForm.elements.namedItem('only_medical')?.checked)add('Закупки по медицине (med.ecc.kz, fms.ecc.kz)','only_medical','on','condition-procurement');
+  if(value('remaining_hours'))add('До окончания приёма: '+value('remaining_hours')+' ч','remaining_hours',value('remaining_hours'),'condition-procurement');
   if(value('subject'))add('Предмет закупки: '+({'1':'Товары','2':'Работы','3':'Услуги'}[value('subject')]),'subject',value('subject'),'condition-procurement');
   for(const [name,label] of [['deadline_from','Окончание приёма от'],['deadline_to','Окончание приёма до']]){if(value(name))add(label+': '+value(name).split('-').reverse().join('.'),name,value(name),'condition-procurement');}
   if(value('number'))add((value('number_kind')==='announcement_number'?'Номер объявления: ':'Номер лота: ')+value('number'),'number',value('number'),'condition-procurement');
@@ -215,16 +216,19 @@ document.addEventListener('htmx:beforeRequest',event=>{
 (() => {
  const owner=document.body.dataset.userId;
  if(!owner)return;
- let busy=false,again=false,timer;
- async function syncLotState(){
+ let busy=false,again=false,timer,forceNext=false,lastSync=Date.now(),workspaceInFlight=false,workspaceMutation=false;
+ async function syncLotState(force=false){
   if(document.hidden)return;
-  if(busy){again=true;return;}
+  // A full workspace refresh already includes the same flags and counters.
+  // Newly rendered controls are fresh too; only a mutation bypasses this gate.
+  if(!force&&(document.querySelector('#collection-workspace[data-background-poll]')||Date.now()-lastSync<5000))return;
+  if(busy){again=true;forceNext=forceNext||force;return;}
   const ids=[...new Set([...document.querySelectorAll('.lot-actions[data-lot-id]')].map(el=>el.dataset.lotId))];
   if(!ids.length)return;
   busy=true;
   try{
    for(let offset=0;offset<ids.length;offset+=100){
-    const response=await fetch(document.body.dataset.lotStateUrl+'?ids='+ids.slice(offset,offset+100).join(','),{credentials:'same-origin',cache:'no-store'});
+    const response=await fetch(document.body.dataset.lotStateUrl+'?ids='+ids.slice(offset,offset+100).join(','),{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(20000)});
     if(!response.ok)continue;
     const state=await response.json();if(state.owner!==owner)return;
     const count=document.querySelector('#sidebar-favorite-count');if(count)count.textContent='('+state.favorite_count+')';
@@ -246,22 +250,60 @@ document.addEventListener('htmx:beforeRequest',event=>{
       }
      });
     }
+    lastSync=Date.now();
    }
   }catch(error){/* Leave the last confirmed state on a transient network error. */}
   finally{busy=false;if(again){again=false;schedule();}}
  }
- function schedule(){clearTimeout(timer);timer=setTimeout(syncLotState,150);}
+ function schedule(force=false){
+  forceNext=forceNext||force===true;
+  clearTimeout(timer);
+  if(document.hidden)return;
+  timer=setTimeout(()=>{const force=forceNext;forceNext=false;void syncLotState(force);},150);
+ }
  const channel=typeof BroadcastChannel==='function'?new BroadcastChannel('lot-state-'+owner):null;
- if(channel)channel.onmessage=schedule;
- document.addEventListener('htmx:afterRequest',event=>{
-  const path=event.detail.requestConfig?.path||'';
-  if(event.detail.successful&&/\/lots\/\d+\/(favorite|status-watch)\//.test(path)){schedule();channel?.postMessage('changed');}
+ if(channel)channel.onmessage=()=>{if(workspaceInFlight)workspaceMutation=true;schedule(true);};
+ document.addEventListener('htmx:beforeSend',event=>{
+  if(event.detail.elt?.id==='collection-workspace'){workspaceInFlight=true;workspaceMutation=false;}
  });
- document.addEventListener('htmx:afterSwap',schedule);
- window.addEventListener('pageshow',()=>{schedule();channel?.postMessage('view-opened');});
- window.addEventListener('focus',schedule);
- document.addEventListener('visibilitychange',schedule);
- setInterval(schedule,30000);
+ document.addEventListener('htmx:afterRequest',event=>{
+  if(event.detail.elt?.id==='collection-workspace')workspaceInFlight=false;
+  const path=event.detail.requestConfig?.path||'';
+  if(event.detail.successful&&/\/lots\/\d+\/(favorite|status-watch)\//.test(path)){if(workspaceInFlight)workspaceMutation=true;schedule(true);channel?.postMessage('changed');}
+ });
+ document.addEventListener('htmx:afterSwap',event=>{
+  const workspace=event.detail.elt;
+  if(workspace?.id!=='collection-workspace')return;
+  for(const [key,selector] of [['collectionCount','#sidebar-collection-count'],['favoriteCount','#sidebar-favorite-count']]){
+   const value=workspace.dataset[key],node=document.querySelector(selector);
+   if(node&&/^\d+$/.test(value||''))node.textContent='('+value+')';
+  }
+  lastSync=Date.now();
+  // A concurrent mutation can be newer than the table response we just swapped.
+  if(workspaceMutation){workspaceMutation=false;schedule(true);}
+ });
+ window.addEventListener('pageshow',event=>{if(event.persisted)schedule(true);});
+ window.addEventListener('focus',()=>schedule());
+ document.addEventListener('visibilitychange',()=>schedule());
+ setInterval(()=>schedule(),30000);
 })();
 
 document.addEventListener("change",event=>{if(event.target.matches("select[data-page-size]"))event.target.form.requestSubmit();});
+
+// HTMX replaces pending results frequently; derive the frame from search time,
+// so polling does not restart the illustration cycle or introduce layout jumps.
+(()=>{
+ const reduced=window.matchMedia('(prefers-reduced-motion: reduce)');
+ function updateSearchArt(){
+  document.querySelectorAll('.search-progress-art').forEach(art=>{
+   const frames=[...art.querySelectorAll('[data-progress-frame]')];
+   const start=Number(art.dataset.searchStart)*1000;
+   const frame=reduced.matches?0:Math.floor(Math.max(0,Date.now()-start)/4000)%frames.length;
+   frames.forEach((image,index)=>{image.hidden=index!==frame;});
+   art.querySelectorAll('.search-progress-dots i').forEach((dot,index)=>{dot.classList.toggle('active',index===frame);});
+  });
+ }
+ updateSearchArt();
+ document.addEventListener('htmx:afterSwap',updateSearchArt);
+ setInterval(updateSearchArt,1000);
+})();
