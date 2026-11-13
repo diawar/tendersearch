@@ -36,8 +36,8 @@ def apply_interest(query):
         if not delivery or not TelegramSubscription.objects.filter(pk=sub.pk,enabled=True,chat_id=chat_id,owner__is_active=True).exists():
             return 'Кнопка недоступна для этого сообщения.'
         state=UserLotWorkflow.objects.select_for_update().filter(owner_id=sub.owner_id,lot_id=delivery.lot_id).first()
-        if state and state.stage=='interesting':
-            return 'Лот уже в интересных.'
+        if state and state.stage in ('interesting','preparing'):
+            return 'Лот уже в работе.'
         if state and state.stage in (*LOCKED_STAGES,'preparing'):
             return 'Лот уже на следующем этапе. Этап сохранён.'
         if delivery.lot.announcement.deadline and delivery.lot.announcement.deadline<=timezone.now():
@@ -48,7 +48,7 @@ def apply_interest(query):
         if status_id and str(status_id) not in ('6','7','9'):
             return 'Приём по этому лоту недоступен. Лот не перенесён.'
         add_to_interesting(sub.owner_id,delivery.lot_id)
-        return 'Лот добавлен в интересные.'
+        return 'Лот взят в работу.'
 
 
 def handle_callback(query):

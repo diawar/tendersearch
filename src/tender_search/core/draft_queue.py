@@ -15,6 +15,7 @@ from django.views.decorators.http import require_GET, require_POST
 from .models import DraftQueueItem, UserLotWorkflow, CompanySettings, ApplicationPreparation, SearchProfile
 from .preparation import save_portal_report, supports_preparation_export, PreparationForm
 from .workflow_state import update_workflow
+from .workflow_async import workflow_async
 
 
 def expire_draft_queue(owner=None):
@@ -36,6 +37,7 @@ def queue(request):
 
 @login_required
 @require_POST
+@workflow_async
 def enqueue(request):
     from django.utils.http import url_has_allowed_host_and_scheme
     target=request.POST.get('return_to','')
@@ -43,7 +45,7 @@ def enqueue(request):
         target='draft_queue'
     values=list(dict.fromkeys(request.POST.getlist('lots')))
     if not values or len(values)>20 or any(not value.isdecimal() for value in values):
-        messages.error(request,'Выберите от 1 до 20 интересных лотов.')
+        messages.error(request,'Выберите от 1 до 20 лотов в работе.')
         return redirect(target)
     count=0
     with transaction.atomic():
@@ -57,7 +59,7 @@ def enqueue(request):
             update_workflow(request.user.pk,workflow.lot_id,stage='preparing')
             count+=1
     if count:messages.success(request,f'В очереди: {count}. Повторно выбранные лоты не дублируются.')
-    if count<len(values):messages.warning(request,'Часть лотов не добавлена: нужен этап «Интересные лоты» и поддерживаемая площадка Госзакупа.')
+    if count<len(values):messages.warning(request,'Часть лотов не добавлена: нужен этап «В работе» и поддерживаемая площадка Госзакупа.')
     return redirect(target)
 
 
@@ -149,7 +151,7 @@ def cancel(request,item_id):
         else:
             item.state='cancelled';item.save(update_fields=['state','updated_at'])
             if UserLotWorkflow.objects.filter(owner=request.user,lot_id=item.lot_id,stage='preparing').exists():
-                update_workflow(request.user.pk,item.lot_id,stage='interesting')
+                update_workflow(request.user.pk,item.lot_id,stage='not_participated')
     return redirect('draft_queue')
 
 

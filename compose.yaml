@@ -12,6 +12,7 @@ x-app: &app
     TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
     TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
     TELEGRAM_POLLING_ENABLED: ${TELEGRAM_POLLING_ENABLED:-true}
+    P1_API_TOKEN: ${P1_API_TOKEN:-}
   volumes:
     - documents:/app/data
   init: true
@@ -60,6 +61,11 @@ services:
 
   web:
     <<: *app
+    environment:
+      <<: *environment
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      P1_API_TOKEN: ${P1_API_TOKEN:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6-luna}
     build: .
     ports:
       - "127.0.0.1:${WEB_PORT:-8000}:8000"
@@ -76,7 +82,38 @@ services:
 
   worker:
     <<: *app
+    environment:
+      <<: *environment
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      P1_API_TOKEN: ${P1_API_TOKEN:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6-luna}
     command: [celery, -A, tender_search.web, worker, --loglevel=INFO, --concurrency=1, --max-tasks-per-child=50, -Q, celery, -n, background@%h]
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 512m
+
+  product-analysis-worker:
+    <<: *app
+    environment:
+      <<: *environment
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-6-luna}
+    command: [celery, -A, tender_search.web, worker, --loglevel=INFO, --concurrency=1, --max-tasks-per-child=50, -Q, product-analysis, -n, product-analysis@%h]
+    depends_on:
+      initialize:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 512m
+
+  specification-worker:
+    <<: *app
+    command: [celery, -A, tender_search.web, worker, --loglevel=INFO, --concurrency=1, --max-tasks-per-child=50, -Q, specifications, -n, specifications@%h]
     depends_on:
       initialize:
         condition: service_completed_successfully

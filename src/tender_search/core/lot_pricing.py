@@ -124,7 +124,7 @@ def price_budget(lot):
         with localcontext() as ctx:
             ctx.prec = 70
             unit = (lot.amount / quantity).quantize(CENT, rounding=ROUND_HALF_UP)
-    return {'unit': unit, 'total': lot.amount, 'quantity': quantity}
+    return {'unit': unit, 'total': lot.amount, 'quantity': quantity, 'measure':policy['measure']}
 
 
 class LotPriceForm(forms.Form):

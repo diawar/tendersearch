@@ -1,3 +1,4 @@
+from .workflow_async import workflow_async
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.db import connection, transaction
@@ -9,6 +10,7 @@ from django.shortcuts import render
 from django.shortcuts import get_object_or_404, redirect
 from django.core.paginator import Paginator
 from django.views.decorators.http import require_POST
+from django.views.decorators.cache import never_cache
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from datetime import timedelta
@@ -43,6 +45,7 @@ def dashboard(request):
 
 
 @login_required
+@never_cache
 def search(request):
     initial = None
     profile = None
@@ -111,6 +114,21 @@ def search(request):
 
 @login_required
 @require_POST
+def profile_rename(request, profile_id):
+    profile = get_object_or_404(SearchProfile, pk=profile_id, owner=request.user)
+    name = request.POST.get('name', '').strip()
+    if not name or len(name) > 200:
+        response = JsonResponse({'error': 'Введите название подборки: от 1 до 200 символов.'}, status=400)
+    else:
+        # Renaming must not reschedule tracking or modify the saved search filters.
+        SearchProfile.objects.filter(pk=profile.pk, owner=request.user).update(name=name)
+        response = JsonResponse({'id': profile.pk, 'name': name})
+    response['Cache-Control'] = 'no-store, private'
+    return response
+
+
+@login_required
+@require_POST
 def profile_delete(request, profile_id):
     from .workflow_state import delete_profile_preserving_work
     from django.contrib import messages
@@ -160,6 +178,7 @@ def search_cancel(request, job_id):
 
 
 @login_required
+@never_cache
 def search_results(request, job_id):
     from .pagination import page_settings
     pagination=page_settings(request,'search')
@@ -318,6 +337,7 @@ def lot_detail_status(request, lot_id):
 
 
 @login_required
+@never_cache
 def lot_detail(request, lot_id, price_form=None, updates=False):
     lot = get_object_or_404(Lot.objects.select_related("announcement", "customer"), pk=lot_id)
     loaded_checked_at = lot.checked_at
@@ -358,7 +378,8 @@ def lot_detail(request, lot_id, price_form=None, updates=False):
     from .shipping import context as shipment_context
     from .models import CollectionLot
     untriaged_item = CollectionLot.objects.filter(profile__owner=request.user,lot=lot,stage='new').order_by('pk').first() if lot.workflow and lot.workflow.stage == 'new' else None
-    return render(request, "core/_lot_detail.html" if updates or request.headers.get("HX-Request") else "core/lot_detail.html", {"untriaged_item":untriaged_item,"lot_description": "\n".join(dict.fromkeys(line.strip() for line in lot.description.splitlines())), "lot_revisions":lot_revisions(lot,batch,specification),"specification":specification,"specification_pending":bool(specification and specification.state in ('queued','running')),**pricing_context(request.user, lot, price_form), **shipment_context(request.user, lot), "lot": lot, "back_url": back_url, "documents": documents, "document_batch": batch, "documents_pending": bool(batch and batch.state in {"queued", "running"}), "outcome_watch": lot.personal_outcome_watch, "lot_note": UserLotNote.objects.filter(owner=request.user, lot=lot).values_list("text", flat=True).first() or ""})
+    from .deal_snapshot import context as deal_context
+    return render(request, "core/_lot_detail.html" if updates or request.headers.get("HX-Request") else "core/lot_detail.html", {**deal_context(request.user,lot),"untriaged_item":untriaged_item,"lot_description": "\n".join(dict.fromkeys(line.strip() for line in lot.description.splitlines())), "lot_revisions":lot_revisions(lot,batch,specification),"specification":specification,"specification_pending":bool(specification and specification.state in ('queued','running')),**pricing_context(request.user, lot, price_form), **shipment_context(request.user, lot), "lot": lot, "back_url": back_url, "documents": documents, "document_batch": batch, "documents_pending": bool(batch and batch.state in {"queued", "running"}), "outcome_watch": lot.personal_outcome_watch, "lot_note": UserLotNote.objects.filter(owner=request.user, lot=lot).values_list("text", flat=True).first() or ""})
 
 
 @login_required
@@ -421,8 +442,14 @@ def lot_note_save(request, lot_id):
     if len(text) > 10000:
         messages.error(request, 'Заметка должна содержать не более 10 000 символов.')
     else:
-        UserLotNote.objects.update_or_create(owner=request.user, lot=lot, defaults={'text': text})
-        messages.success(request, 'Заметка сохранена.')
+        from .models import PurgedUserLot
+        with transaction.atomic():
+            list(SearchProfile.objects.select_for_update().filter(owner=request.user).order_by('pk'))
+            if PurgedUserLot.objects.filter(owner=request.user,lot=lot).exists():
+                messages.error(request,'Данные лота удалены после хранения в архиве. Чтобы начать работу заново, нажмите «В работу».')
+            else:
+                UserLotNote.objects.update_or_create(owner=request.user, lot=lot, defaults={'text': text})
+                messages.success(request, 'Заметка сохранена.')
     return_to = request.POST.get('return_to', '')
     if (return_to and url_has_allowed_host_and_scheme(return_to, allowed_hosts={request.get_host()}, require_https=request.is_secure())
             and urlsplit(return_to).path == reverse('workspace')):
@@ -446,6 +473,7 @@ def lot_refresh(request, lot_id):
 
 @login_required
 @require_POST
+@workflow_async
 def favorite(request, lot_id):
     lot = get_object_or_404(Lot, pk=lot_id)
     from .workflow_state import add_to_interesting, remove_from_work
@@ -468,6 +496,7 @@ def favorite(request, lot_id):
 
 
 @login_required
+@never_cache
 def favorites(request):
     ordering = {'amount': 'amount', 'added': 'favorite__created_at', 'status': 'status'}
     selected = request.GET.get('sort', '-added')

@@ -196,7 +196,7 @@ class SearchProfile(Timestamped):
 
 
 class CollectionLot(Timestamped):
-    STAGES = [('new', 'Сохранён в подборку'), ('interesting', 'Интересные лоты'), ('preparing', 'Подготовка заявки'), ('applied', 'Подали заявку'),
+    STAGES = [('new', 'Сохранён в подборку'), ('preparing', 'В работе'), ('applied', 'Подали заявку'), ('waiting_results', 'Ожидаем итоги'),
               ('won', 'Выиграли'), ('lost', 'Проиграли'), ('not_participated', 'Не участвовали'), ('contract', 'Заключение договора'), ('delivery', 'Поставка'), ('payment', 'Оплата'), ('archived', 'Архив')]
     OUTCOMES = [('', 'Решение не указано'), ('won', 'Выиграли'), ('lost', 'Не выиграли')]
     profile = models.ForeignKey(SearchProfile, on_delete=models.CASCADE, related_name='collection_lots')
@@ -261,6 +261,45 @@ class ApplicationPreparation(Timestamped):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=['owner', 'lot'], name='unique_application_preparation')]
+
+
+class PurgedUserLot(models.Model):
+    """Minimal suppression marker: never retain the deleted work or its contents."""
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
+    purged_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['owner', 'lot'], name='unique_purged_user_lot')]
+
+
+class StoredFileDeletion(Timestamped):
+    kind = models.CharField(max_length=20)
+    name = models.CharField(max_length=500)
+    attempts = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['kind', 'name'], name='unique_stored_file_deletion')]
+
+
+class LotDealEstimate(Timestamped):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
+    inputs = models.JSONField(default=dict)
+    snapshot = models.JSONField(default=dict)
+    selected_offer = models.PositiveIntegerField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['owner', 'lot'], name='unique_lot_deal_estimate')]
+
+
+class LotObligationCosts(Timestamped):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
+    entries = models.JSONField(default=list)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['owner', 'lot'], name='unique_lot_obligation_costs')]
 
 
 class DraftQueueItem(Timestamped):
@@ -715,6 +754,17 @@ class WorkflowDelivery(Timestamped):
     error = models.CharField(max_length=200, blank=True)
 
 
+class ProductAnalysis(Timestamped):
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL,on_delete=models.CASCADE)
+    lot = models.ForeignKey(Lot,on_delete=models.CASCADE)
+    state = models.CharField(max_length=20,default='queued')
+    generation = models.CharField(max_length=64)
+    result = models.JSONField(default=dict)
+    error = models.CharField(max_length=300,blank=True)
+    class Meta:
+        constraints=[models.UniqueConstraint(fields=['owner','lot'],name='unique_owner_lot_product_analysis')]
+
+
 class LotSpecification(Timestamped):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     lot = models.ForeignKey(Lot, on_delete=models.CASCADE)
@@ -724,6 +774,15 @@ class LotSpecification(Timestamped):
     error = models.CharField(max_length=300, blank=True)
     class Meta:
         constraints = [models.UniqueConstraint(fields=['owner','lot'], name='unique_owner_lot_specification')]
+
+
+class P1CatalogSnapshot(models.Model):
+    products = models.JSONField(default=dict)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    lease = models.CharField(max_length=64, blank=True)
+    lease_until = models.DateTimeField(null=True, blank=True)
+    retry_at = models.DateTimeField(null=True, blank=True)
+    error = models.CharField(max_length=250, blank=True)
 
 
 class TechnicalIndexProgress(models.Model):

@@ -6,6 +6,29 @@ from django.utils.html import format_html_join, format_html
 register = template.Library()
 
 
+@register.inclusion_tag('core/_page_links.html', takes_context=True)
+def numbered_pagination(context, page):
+    from tender_search.core.pagination import page_numbers
+    if not page or page.paginator.num_pages <= 1:
+        return {}
+    request = context['request']
+    query = request.GET.copy()
+    query.pop('remaining', None)  # Deadline is now a saved search condition, not a result filter.
+    for key, value in [('per_page', context.get('per_page')),
+                       ('sort', context.get('collection_sort') or context.get('result_sort') or context.get('favorite_sort')),
+                       ('profile', context.get('collection_key')), ('stage', context.get('stage'))]:
+        if value is not None:
+            query[key] = str(value)
+    def link(number):
+        query['page'] = str(number)
+        return '?' + query.urlencode() + ('#search-results' if context.get('job') else '')
+    return {'links': [{'number': number, 'url': link(number) if number else '',
+                       'current': number == page.number}
+                      for number in page_numbers(page.number, page.paginator.num_pages)],
+            'previous_url': link(page.previous_page_number()) if page.has_previous() else '',
+            'next_url': link(page.next_page_number()) if page.has_next() else ''}
+
+
 @register.simple_tag(name='budget_unit_price')
 def budget_unit_price_tag(lot):
     from tender_search.core.lot_pricing import budget_unit_price

@@ -80,15 +80,12 @@ def parse_lot_result(text, announcement_number, lot_number, company_bin):
             winners.add(match.group(1))
         if not winners and len(people)==1 and re.search(r'Решено\s+заключить\s+договор\s+с\s+приглашенным\s+поставщиком',flat,re.I):
             winners.add(people[0].identifier)
-        if re.search(r'Признать.{0,100}несостоявш|закупк[аи].{0,60}не\s+состоял',flat,re.I): terminal.add('unsuccessful')
+        if (re.search(r'Признать.{0,100}несостоявш|закупк[аи].{0,60}не\s+состоял',flat,re.I) or
+                re.search(r'Признать\s+государственную\s+закупку.{0,1500}?по\s+лоту\s*№\s*'+re.escape(number)+r'\s+несостоявшейся',flat,re.I)):
+            terminal.add('unsuccessful')
         if re.search(r'Решено\s*:\s*отменить.{0,60}закупк',flat,re.I): terminal.add('cancelled')
     if unresolved or len(winners)>1 or (winners and terminal) or len(terminal)>1:
         raise ProtocolFormatError('Итоги лота неоднозначны; требуется ручная проверка.')
-    if terminal: return Outcome(terminal.pop())
-    if len(winners)!=1 or not winners.issubset(participants):
-        raise ProtocolFormatError('Победитель нужного лота не подтверждён.')
-    winner=next(iter(winners))
-    state='won' if winner==company_bin else ('lost' if company_bin in participants else 'not_listed')
     counts = set()
     for block in blocks:
         counts.update(int(value) for value in re.findall(
@@ -107,6 +104,18 @@ def parse_lot_result(text, announcement_number, lot_number, company_bin):
             totals.append(int(accepted[0]) + int(rejected[0]))
         if totals:
             counts = set(totals)
+    # A failed procurement may have no winner. Absence is still provable from
+    # the complete, lot-scoped accepted AND rejected offer counts, including 0+0.
+    complete = counts == {len(participants)}
+    if terminal:
+        terminal_state = terminal.pop()
+        if terminal_state == 'unsuccessful' and complete and company_bin not in participants:
+            return Outcome('not_listed',participants_complete=True)
+        return Outcome(terminal_state)
+    if len(winners)!=1 or not winners.issubset(participants):
+        raise ProtocolFormatError('Победитель нужного лота не подтверждён.')
+    winner=next(iter(winners))
+    state='won' if winner==company_bin else ('lost' if company_bin in participants else 'not_listed')
     # Presence proves participation; absence requires a verified full count.
     complete = counts == {len(participants)} and len(participants) > 0
     return Outcome(state,winner,participants[winner],participants_complete=complete)

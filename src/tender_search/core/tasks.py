@@ -31,7 +31,7 @@ def refresh_collection(profile_id, lease, revision):
     from .collections_service import update_collection
     update_collection(profile_id, lease, revision)
 
-@shared_task(soft_time_limit=120,time_limit=150)
+@shared_task(soft_time_limit=300,time_limit=330)
 def check_announcement_status(watch_id,lease):
     from .status_monitor import check_status
     check_status(watch_id,lease)
@@ -73,3 +73,37 @@ def extract_lot_specification(job_id, generation):
 def index_technical_documents(index_id):
     from .technical_documents import process
     process(index_id)
+
+
+@shared_task(soft_time_limit=900,time_limit=930)
+def sync_p1_catalog(lease):
+    from .p1_sync import process
+    process(lease)
+
+
+@shared_task(soft_time_limit=300,time_limit=330)
+def analyze_preparation_product(job_id,generation):
+    from .models import ProductAnalysis,CompanySettings,UserLotWorkflow
+    from .preparation import preparation_specification_context
+    from .lot_pricing import attach_lot_budgets,price_budget,company_vat_rate
+    from .product_ai import select_products_ai
+    from django.utils import timezone
+    if not ProductAnalysis.objects.filter(pk=job_id,generation=generation,state='queued').update(state='running',updated_at=timezone.now()):return
+    job=ProductAnalysis.objects.select_related('lot__announcement','owner').get(pk=job_id)
+    try:
+        if not UserLotWorkflow.objects.filter(owner=job.owner,lot=job.lot,stage='preparing').exists():raise ValueError('Лот уже перешёл на другой этап.')
+        documents=preparation_specification_context(job.owner,job.lot)['specification_documents']
+        if not documents:raise ValueError('Техническая спецификация пока не загружена.')
+        attach_lot_budgets([job.lot]);budget=price_budget(job.lot)
+        if not budget:raise ValueError('Бюджет лота не подтверждён.')
+        company=CompanySettings.objects.filter(owner=job.owner).first()
+        checkpoint=dict(job.result)
+        def progress(stage, values):
+            checkpoint.update(values);checkpoint['_progress']=stage
+            ProductAnalysis.objects.filter(pk=job_id,generation=generation).update(result=checkpoint,updated_at=timezone.now())
+        result=select_products_ai(job.lot.name,documents,budget,company_vat_rate(job.owner,company=company),previous=job.result,progress=progress)
+        result['checked_at']=timezone.now().isoformat()
+        ProductAnalysis.objects.filter(pk=job_id,generation=generation).update(state='done',result=result,error='',updated_at=timezone.now())
+    except Exception as error:
+        message=str(error)[:300] if isinstance(error,ValueError) else 'Не удалось получить каталог Over-shop. Повторите позже.'
+        ProductAnalysis.objects.filter(pk=job_id,generation=generation).update(state='error',error=message,updated_at=timezone.now())

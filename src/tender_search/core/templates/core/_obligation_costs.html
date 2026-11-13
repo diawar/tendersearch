@@ -1,0 +1,8 @@
+<div class="calculator-costs" id="obligation-costs" data-editable="{{ editable|yesno:'true,false' }}">
+{{ obligation_entries|json_script:'obligation-costs-data' }}
+<div class="calculator-costs-heading"><strong>Дополнительные расходы</strong>{% if editable %}<button type="button" class="outline" data-obligation-add aria-label="Добавить расход">+ Добавить расход</button>{% endif %}</div>
+<p class="muted">Подъём, настройка и другие услуги — сумма за весь лот, включая налоги. Пустая сумма означает, что расход ещё не оценён.</p>
+<div data-obligation-rows></div>
+<p><strong>Всего: <span data-obligation-total>—</span></strong></p>
+<p data-obligation-status role="status" aria-live="polite"></p>
+</div>

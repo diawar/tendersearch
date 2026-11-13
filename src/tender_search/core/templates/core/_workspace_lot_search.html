@@ -1,0 +1,6 @@
+{% load search_tags %}
+<form id="workspace-lot-search" class="panel workspace-lot-search" method="get" action="{{ request.path }}" hx-preserve>
+<input type="hidden" name="profile" value="{{ collection_key }}"><input type="hidden" name="stage" value="{{ stage }}"><input type="hidden" name="sort" value="{{ collection_sort }}"><input type="hidden" name="per_page" value="{{ per_page }}">
+<div><label for="workspace-lot-number">Поиск по номеру лота</label><input id="workspace-lot-number" type="search" name="lot_number" value="{{ workspace_lot_number }}" maxlength="100" placeholder="Номер лота или его часть" autocomplete="off"></div>
+<button type="submit" class="button preparation-cta">{% icon 'search' %} Найти</button>{% if workspace_lot_number %}<a class="outline" href="{{ workspace_clear_url }}">Сбросить</a>{% endif %}
+</form>

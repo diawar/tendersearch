@@ -1,12 +1,17 @@
 {% load search_tags %}
 <section id="lot-detail" data-status-url="{% url 'lot_detail_status' lot_id=lot.pk %}" data-detail="{{ lot_revisions.detail }}" data-documents="{{ lot_revisions.documents }}" data-specification="{{ lot_revisions.specification }}" data-pending="{% if lot.refresh_state == 'running' or documents_pending or specification_pending %}true{% else %}false{% endif %}">
 {% include 'core/_lot_header.html' %}
+<div id="lot-workflow-region">
 {% if lot.workflow.stage == 'preparing' or lot.has_preparation %}<section class="panel"><a class="outline" href="{% url 'application_preparation' lot_id=lot.pk %}">{% if lot.has_preparation %}Данные заявки{% else %}Подготовить заявку{% endif %}</a></section>{% endif %}
 {% if lot.workflow_actions or lot.contract_watch or lot.is_archived %}<section class="panel"><h2>{{ lot.workflow.get_stage_display }}</h2>{% include 'core/_fulfillment_actions.html' %}</section>{% endif %}
+</div>
 <div id="lot-price-region">{% if saved_price and not price_editable %}{% include 'core/_lot_price.html' %}{% endif %}</div>
 {% include 'core/_lot_specification.html' %}
-{% if lot.workflow.stage == 'interesting' %}<section class="panel lot-triage-actions"><form method="post" action="{% url 'draft_queue_add' %}">{% csrf_token %}<input type="hidden" name="lots" value="{{ lot.pk }}"><button class="button triage-primary" type="submit">В подготовку заявки</button></form></section>{% endif %}
+<div id="lot-triage-region">
+
 {% if untriaged_item %}{% include 'core/_lot_triage_actions.html' %}{% endif %}
+</div>
+{% include 'core/_saved_deal.html' %}
 {% include 'core/_lot_note.html' %}
 {% include 'core/_shipment.html' %}
 {% include 'core/_outcome_status.html' with watch=outcome_watch %}

@@ -8,6 +8,9 @@ from tender_search.core.contract_service import schedule_contracts
 from tender_search.core.technical_documents import schedule as schedule_documents
 from tender_search.core.document_service import cleanup_expired_documents
 from tender_search.core.workflow_notifications import deliver_workflow_notifications
+from tender_search.core.fulfillment import archive_completed_wins
+from tender_search.core.archive_retention import cleanup_archived_lots
+from tender_search.core.p1_sync import schedule as schedule_p1
 
 
 class Command(BaseCommand):
@@ -20,7 +23,7 @@ class Command(BaseCommand):
                 schedule_collections()
             except Exception:
                 self.stderr.write('Collection scheduling unavailable; retrying.')
-            for operation in (expire_draft_queue, move_closed_unsubmitted, schedule_outcomes, deliver_outcomes, schedule_contracts, deliver_workflow_notifications, schedule_documents, cleanup_expired_documents):
+            for operation in (expire_draft_queue, move_closed_unsubmitted, archive_completed_wins, cleanup_archived_lots, schedule_outcomes, deliver_outcomes, schedule_contracts, deliver_workflow_notifications, schedule_p1, schedule_documents, cleanup_expired_documents):
                 try:
                     operation()
                 except Exception:

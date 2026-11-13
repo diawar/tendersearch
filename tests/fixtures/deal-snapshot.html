@@ -1,0 +1,690 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="htmx-config" content='{"selfRequestsOnly":true,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0}'><title>Подготовка заявки — Госзакупки</title><link rel="icon" type="image/svg+xml" href="/static/core/favicon.svg?v=goszakupki-black"><link rel="stylesheet" href="/static/core/app.css"><script src="/static/core/private-pages.js"></script><script defer src="/static/core/htmx.min.js"></script><script defer src="/static/core/background-poll.js"></script><script defer src="/static/core/search.js"></script><script defer src="/static/core/copy.js"></script><script defer src="/static/core/profile-rename.js"></script><script defer src="/static/core/pricing.js"></script><script defer src="/static/core/deadline.js"></script><script defer src="/static/core/workflow-actions.js"></script></head><body hx-history="false" data-account-scope="fixture-scope" data-user-id="1" data-lot-state-url="/lots/ui-state/" data-icons="/static/core/icons.svg"><header><a class="brand" href="/">Гос<span>закупки</span></a><div class="account"><span class="avatar">T</span><div><strong>test</strong><small>Личный кабинет</small></div><form method="post" action="/logout/"><input type="hidden" name="csrfmiddlewaretoken" value="test-csrf"><button type="submit" class="account-logout" aria-label="Выйти из учётной записи" title="Выйти"><svg class="icon" aria-hidden="true" focusable="false"><use href="/static/core/icons.svg#log-out"></use></svg></button></form></div></header><aside class="sidebar"><a href="/"><svg class="icon" aria-hidden="true" focusable="false"><use href="/static/core/icons.svg#layout-grid"></use></svg> &nbsp; Главная</a><a class="" href="/search/"><svg class="icon" aria-hidden="true" focusable="false"><use href="/static/core/icons.svg#search"></use></svg> &nbsp; Поиск закупок</a><a class="" href="/workspace/"><svg class="icon" aria-hidden="true" focusable="false"><use href="/static/core/icons.svg#folder"></use></svg> &nbsp; Рабочее пространство <span id="sidebar-collection-count">()</span></a><a class="" href="/favorites/"><svg class="icon" aria-hidden="true" focusable="false"><use href="/static/core/icons.svg#star"></use></svg> &nbsp; Избранное <span id="sidebar-favorite-count">()</span></a><span class="nav-coming-soon" role="link" aria-disabled="true" title="Аналитика — скоро"><svg class="icon" aria-hidden="true" focusable="false"><use href="/static/core/icons.svg#chart"></use></svg> Аналитика <small>Скоро</small></span><a href="/settings/"><svg class="icon" aria-hidden="true" focusable="false"><use href="/static/core/icons.svg#settings"></use></svg> &nbsp; Настройки</a></aside><main class="">
+<div class="preparation-page">
+<div class="page-heading"><div><a href="/workspace/?profile=all&amp;stage=preparing">← К лотам в работе</a><h1>Подготовка заявки</h1></div><a href="/settings/#chrome-extension">Установка расширения</a></div>
+<section class="panel preparation-summary">
+<h2>Тестовый монитор</h2><p>Лот 10000000-ЗЦП1 <button type="button" class="lot-copy" data-copy-text="10000000-ЗЦП1" title="Копировать номер лота" aria-label="Копировать номер лота"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg><span class="copy-feedback" role="status"></span></button>
+ · Объявление 10000000-1 <button type="button" class="lot-copy" data-copy-text="10000000-1" title="Копировать номер объявления" aria-label="Копировать номер объявления"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg><span class="copy-feedback" role="status"></span></button>
+</p>
+
+<div class="preparation-status" role="status">
+<strong>Заполните данные для черновика</strong>
+
+</div>
+
+
+
+</section>
+<section class="panel preparation-guide" id="preparation-guide" data-bin-ready="true" data-workflow="preparing" data-saved="false" data-draft-ready="false" data-submitted="false">
+<div class="preparation-current"><div><span class="eyebrow">Следующий шаг</span><h2 data-current-step>Проверьте требования и заполните подготовку</h2><p data-current-help>Сохранение данных и создание черновика не означают подачу заявки.</p></div><a class="button preparation-cta" data-next-step href="#prep-step-1">Перейти к шагу</a></div>
+<nav aria-label="Шаги подготовки заявки" class="preparation-step-nav">
+<a href="#prep-step-1" data-step="1"><b>1</b><span>Требования<small>Проверить спецификацию</small></span></a>
+<a href="#prep-step-2" data-step="2"><b>2</b><span>Товар и цена<small>Заполнить данные</small></span></a>
+<a href="#prep-step-3" data-step="3"><b>3</b><span>Реквизиты<small>Проверить и сохранить</small></span></a>
+<a href="#prep-step-4" data-step="4"><b>4</b><span>Калькулятор сделки<small>Проверка сделки</small></span></a>
+<a href="#prep-step-5" data-step="5"><b>5</b><span>Черновик<small>Создать на Госзакупе</small></span></a>
+<a href="#prep-step-6" data-step="6"><b>6</b><span>Подача и итоги<small>Подтверждение портала</small></span></a>
+</nav>
+<p class="muted">Шаги 1–5 — подготовка. Подписание и отправка выполняются на Госзакупе. Затем приложение проверяет подачу и итоги по БИН.</p>
+</section>
+
+<section id="prep-step-1" class="panel preparation-step preparation-requirements">
+<section class="panel preparation-specification" id="preparation-specification" >
+<div class="section-heading"><h2>1. Требования заказчика · техническая спецификация</h2>
+<form method="post" action="/lots/1/preparation/specification/" hx-post="/lots/1/preparation/specification/" hx-target="#preparation-specification" hx-swap="outerHTML"><input type="hidden" name="csrfmiddlewaretoken" value="test-csrf"><button class="outline" type="submit">Загрузить техспецификацию</button></form></div>
+
+<p class="muted">Текст пока не загружен. Загрузите техспецификацию, чтобы сверить требования заказчика с предлагаемым товаром.</p>
+</section>
+
+
+<section class="product-selection" id="product-selection" data-ai-configured="false" data-analysis-url="/lots/1/preparation/product-analysis/">
+<h2>Подобрать товар из каталога</h2><p class="muted">Необязательно: можно заполнить выбранный товар вручную ниже.</p><p>ИИ выделяет требования и сравнивает реальные карточки каталога. Приложение проверяет количество и бюджет: сначала онлайн-цену, затем клубную, с учётом НДС вашей организации.</p>
+<p class="notice">ИИ не подключён. Администратору нужно настроить OPENAI_API_KEY и OPENAI_MODEL на сервере. Ключ в браузере не вводится.</p>
+<button class="button preparation-cta" type="button" id="analyze-product" disabled>Проанализировать спецификацию и подобрать товар</button>
+<p id="product-selection-status" role="status" aria-live="polite"></p><div id="product-selection-results"></div>
+</section>
+</section>
+<form method="post" autocomplete="off" id="preparation-form" data-saved="false" class="lot-price-form" data-quantity="1" data-budget-unit="100" data-budget-total="100"><input type="hidden" name="csrfmiddlewaretoken" value="test-csrf">
+<section class="panel preparation-product-fields preparation-step" id="prep-step-2">
+<h2>2. Товар и наша цена</h2><p class="step-help">Проверьте соответствие требованиям. Укажите конкретный товар, изготовителя, страну производства и цену за единицу.</p>
+<div class="form-grid"><div class="field"><label for="id_product_name">Наименование предлагаемого товара:</label><input type="text" name="product_name" value="Private monitor" maxlength="500" required id="id_product_name"></div><div class="field"><label for="id_manufacturer">Завод-изготовитель:</label><input type="text" name="manufacturer" maxlength="500" required id="id_manufacturer"></div><div class="field"><label for="id_country">Страна происхождения:</label><select name="country" required aria-describedby="id_country_helptext" id="id_country">
+  <option value="" selected>Выберите страну</option>
+
+  <option value="АФГАНИСТАН">АФГАНИСТАН</option>
+
+  <option value="АЛБАНИЯ">АЛБАНИЯ</option>
+
+  <option value="АНТАРКТИДА">АНТАРКТИДА</option>
+
+  <option value="АЛЖИР">АЛЖИР</option>
+
+  <option value="АМЕРИКАНСКОЕ САМОА">АМЕРИКАНСКОЕ САМОА</option>
+
+  <option value="АНДОРРА">АНДОРРА</option>
+
+  <option value="АНГОЛА">АНГОЛА</option>
+
+  <option value="АНТИГУА И БАРБУДА">АНТИГУА И БАРБУДА</option>
+
+  <option value="АЗЕРБАЙДЖАН">АЗЕРБАЙДЖАН</option>
+
+  <option value="АРГЕНТИНА">АРГЕНТИНА</option>
+
+  <option value="АВСТРАЛИЯ">АВСТРАЛИЯ</option>
+
+  <option value="АВСТРИЯ">АВСТРИЯ</option>
+
+  <option value="БАГАМЫ">БАГАМЫ</option>
+
+  <option value="БАХРЕЙН">БАХРЕЙН</option>
+
+  <option value="БАНГЛАДЕШ">БАНГЛАДЕШ</option>
+
+  <option value="АРМЕНИЯ">АРМЕНИЯ</option>
+
+  <option value="БАРБАДОС">БАРБАДОС</option>
+
+  <option value="БЕЛЬГИЯ">БЕЛЬГИЯ</option>
+
+  <option value="БЕРМУДЫ">БЕРМУДЫ</option>
+
+  <option value="БУТАН">БУТАН</option>
+
+  <option value="БОЛИВИЯ">БОЛИВИЯ</option>
+
+  <option value="БОСНИЯ И ГЕРЦЕГОВИНА">БОСНИЯ И ГЕРЦЕГОВИНА</option>
+
+  <option value="БОТСВАНА">БОТСВАНА</option>
+
+  <option value="ОСТРОВ БУВЕ">ОСТРОВ БУВЕ</option>
+
+  <option value="БРАЗИЛИЯ">БРАЗИЛИЯ</option>
+
+  <option value="БЕЛИЗ">БЕЛИЗ</option>
+
+  <option value="БРИТАНСКАЯ ТЕРРИТОРИЯ В ИНДИЙСКОМ ОКЕАНЕ">БРИТАНСКАЯ ТЕРРИТОРИЯ В ИНДИЙСКОМ ОКЕАНЕ</option>
+
+  <option value="СОЛОМОНОВЫ ОСТРОВА">СОЛОМОНОВЫ ОСТРОВА</option>
+
+  <option value="ВИРГИНСКИЕ ОСТРОВА (БРИТ.)">ВИРГИНСКИЕ ОСТРОВА (БРИТ.)</option>
+
+  <option value="БРУНЕЙ-ДАРУССАЛАМ">БРУНЕЙ-ДАРУССАЛАМ</option>
+
+  <option value="БОЛГАРИЯ">БОЛГАРИЯ</option>
+
+  <option value="МЬЯНМА">МЬЯНМА</option>
+
+  <option value="БУРУНДИ">БУРУНДИ</option>
+
+  <option value="БЕЛАРУСЬ">БЕЛАРУСЬ</option>
+
+  <option value="КАМБОДЖА">КАМБОДЖА</option>
+
+  <option value="КАМЕРУН">КАМЕРУН</option>
+
+  <option value="КАНАДА">КАНАДА</option>
+
+  <option value="КАБО-ВЕРДЕ">КАБО-ВЕРДЕ</option>
+
+  <option value="ОСТРОВА КАЙМАН">ОСТРОВА КАЙМАН</option>
+
+  <option value="ЦЕНТРАЛЬНО-АФРИКАНСКАЯ РЕСПУБЛИКА">ЦЕНТРАЛЬНО-АФРИКАНСКАЯ РЕСПУБЛИКА</option>
+
+  <option value="ШРИ-ЛАНКА">ШРИ-ЛАНКА</option>
+
+  <option value="ЧАД">ЧАД</option>
+
+  <option value="ЧИЛИ">ЧИЛИ</option>
+
+  <option value="КИТАЙ">КИТАЙ</option>
+
+  <option value="КИТАЙСКАЯ РЕСПУБЛИКА">КИТАЙСКАЯ РЕСПУБЛИКА</option>
+
+  <option value="ОСТРОВ РОЖДЕСТВА">ОСТРОВ РОЖДЕСТВА</option>
+
+  <option value="КОКОСОВЫЕ ОСТРОВА">КОКОСОВЫЕ ОСТРОВА</option>
+
+  <option value="КОЛУМБИЯ">КОЛУМБИЯ</option>
+
+  <option value="КОМОРЫ ">КОМОРЫ </option>
+
+  <option value="МАЙОТТА">МАЙОТТА</option>
+
+  <option value="КОНГО ">КОНГО </option>
+
+  <option value="ДЕМОКРАТИЧЕСКАЯ РЕСПУБЛИКА КОНГО ">ДЕМОКРАТИЧЕСКАЯ РЕСПУБЛИКА КОНГО </option>
+
+  <option value="ОСТРОВА КУКА">ОСТРОВА КУКА</option>
+
+  <option value="КОСТА-РИКА">КОСТА-РИКА</option>
+
+  <option value="СЕРБИЯ">СЕРБИЯ</option>
+
+  <option value="ХОРВАТИЯ">ХОРВАТИЯ</option>
+
+  <option value="КУБА">КУБА</option>
+
+  <option value="КИПР">КИПР</option>
+
+  <option value="ЧЕШСКАЯ РЕСПУБЛИКА">ЧЕШСКАЯ РЕСПУБЛИКА</option>
+
+  <option value="БЕНИН">БЕНИН</option>
+
+  <option value="ДАНИЯ">ДАНИЯ</option>
+
+  <option value="ДОМИНИКА">ДОМИНИКА</option>
+
+  <option value="ДОМИНИКАНСКАЯ РЕСПУБЛИКА">ДОМИНИКАНСКАЯ РЕСПУБЛИКА</option>
+
+  <option value="ЭКВАДОР">ЭКВАДОР</option>
+
+  <option value="ЭЛЬ-САЛЬВАДОР  ">ЭЛЬ-САЛЬВАДОР  </option>
+
+  <option value="ЭКВАТОРИАЛЬНАЯ ГВИНЕЯ">ЭКВАТОРИАЛЬНАЯ ГВИНЕЯ</option>
+
+  <option value="ЭФИОПИЯ">ЭФИОПИЯ</option>
+
+  <option value="ЭРИТРЕЯ">ЭРИТРЕЯ</option>
+
+  <option value="ЭСТОНИЯ">ЭСТОНИЯ</option>
+
+  <option value="ФАРЕРСКИЕ ОСТРОВА ">ФАРЕРСКИЕ ОСТРОВА </option>
+
+  <option value="ФОЛКЛЕНДСКИЕ (МАЛЬВИНСКИЕ) ОСТРОВА">ФОЛКЛЕНДСКИЕ (МАЛЬВИНСКИЕ) ОСТРОВА</option>
+
+  <option value="ЮЖНАЯ ГЕОРГИЯ И ЮЖНЫЕ САНДВИЧЕВЫ ОСТРОВА">ЮЖНАЯ ГЕОРГИЯ И ЮЖНЫЕ САНДВИЧЕВЫ ОСТРОВА</option>
+
+  <option value="ФИДЖИ  ">ФИДЖИ  </option>
+
+  <option value="ФИНЛЯНДИЯ">ФИНЛЯНДИЯ</option>
+
+  <option value="АЛАНДСКИЕ ОСТРОВА">АЛАНДСКИЕ ОСТРОВА</option>
+
+  <option value="ФРАНЦИЯ">ФРАНЦИЯ</option>
+
+  <option value="ФРАНЦУЗСКАЯ ГВИАНА ">ФРАНЦУЗСКАЯ ГВИАНА </option>
+
+  <option value="ФРАНЦУЗСКАЯ ПОЛИНЕЗИЯ ">ФРАНЦУЗСКАЯ ПОЛИНЕЗИЯ </option>
+
+  <option value="ФРАНЦУЗСКИЕ ЮЖНЫЕ И АНТАРКТИЧЕСКИЕ ТЕРРИТОРИИ">ФРАНЦУЗСКИЕ ЮЖНЫЕ И АНТАРКТИЧЕСКИЕ ТЕРРИТОРИИ</option>
+
+  <option value="ДЖИБУТИ">ДЖИБУТИ</option>
+
+  <option value="ГАБОН">ГАБОН</option>
+
+  <option value="ГРУЗИЯ">ГРУЗИЯ</option>
+
+  <option value="ГАМБИЯ">ГАМБИЯ</option>
+
+  <option value="ПАЛЕСТИНСКАЯ ТЕРРИТОРИЯ, ОККУПИРОВАННАЯ">ПАЛЕСТИНСКАЯ ТЕРРИТОРИЯ, ОККУПИРОВАННАЯ</option>
+
+  <option value="ГЕРМАНИЯ">ГЕРМАНИЯ</option>
+
+  <option value="ГЕРМАНИЯ">ГЕРМАНИЯ</option>
+
+  <option value="ГАНА">ГАНА</option>
+
+  <option value="ГИБРАЛТАР (БРИТ.)">ГИБРАЛТАР (БРИТ.)</option>
+
+  <option value="КИРИБАТИ">КИРИБАТИ</option>
+
+  <option value="ГРЕЦИЯ">ГРЕЦИЯ</option>
+
+  <option value="ГРЕНЛАНДИЯ">ГРЕНЛАНДИЯ</option>
+
+  <option value="ГРЕНАДА">ГРЕНАДА</option>
+
+  <option value="ГВАДЕЛУПА (ФР.)">ГВАДЕЛУПА (ФР.)</option>
+
+  <option value="ГУАМ (США)">ГУАМ (США)</option>
+
+  <option value="ГВАТЕМАЛА">ГВАТЕМАЛА</option>
+
+  <option value="ГВИНЕЯ">ГВИНЕЯ</option>
+
+  <option value="ГАЙАНА">ГАЙАНА</option>
+
+  <option value="ГАИТИ">ГАИТИ</option>
+
+  <option value="ХЕРД И МАКДОНАЛЬД">ХЕРД И МАКДОНАЛЬД</option>
+
+  <option value="ПАПСКИЙ ПРЕСТОЛ (ГОСУДАРСТВО-ГОРОД ВАТИКАН)">ПАПСКИЙ ПРЕСТОЛ (ГОСУДАРСТВО-ГОРОД ВАТИКАН)</option>
+
+  <option value="ГОНДУРАС">ГОНДУРАС</option>
+
+  <option value="ГОНКОНГ">ГОНКОНГ</option>
+
+  <option value="ВЕНГРИЯ">ВЕНГРИЯ</option>
+
+  <option value="ИСЛАНДИЯ">ИСЛАНДИЯ</option>
+
+  <option value="ИНДИЯ">ИНДИЯ</option>
+
+  <option value="ИНДОНЕЗИЯ">ИНДОНЕЗИЯ</option>
+
+  <option value="ИРАН, ИСЛАМСКАЯ РЕСПУБЛИКА">ИРАН, ИСЛАМСКАЯ РЕСПУБЛИКА</option>
+
+  <option value="ИРАК, РЕСПУБЛИКА ИРАК">ИРАК, РЕСПУБЛИКА ИРАК</option>
+
+  <option value="ИРЛАНДИЯ">ИРЛАНДИЯ</option>
+
+  <option value="ИЗРАИЛЬ">ИЗРАИЛЬ</option>
+
+  <option value="ИТАЛИЯ">ИТАЛИЯ</option>
+
+  <option value="КОТ-Д&#x27;ИВУАР">КОТ-Д&#x27;ИВУАР</option>
+
+  <option value="ЯМАЙКА">ЯМАЙКА</option>
+
+  <option value="ЯПОНИЯ">ЯПОНИЯ</option>
+
+  <option value="КАЗАХСТАН">КАЗАХСТАН</option>
+
+  <option value="ИОРДАНИЯ">ИОРДАНИЯ</option>
+
+  <option value="КЕНИЯ">КЕНИЯ</option>
+
+  <option value="КОРЕЯ, НАРОДНО-ДЕМОКРАТИЧЕСКАЯ РЕСПУБЛИКА">КОРЕЯ, НАРОДНО-ДЕМОКРАТИЧЕСКАЯ РЕСПУБЛИКА</option>
+
+  <option value="РЕСПУБЛИКА КОРЕЯ">РЕСПУБЛИКА КОРЕЯ</option>
+
+  <option value="КУВЕЙТ">КУВЕЙТ</option>
+
+  <option value="КЫРГЫЗСТАН">КЫРГЫЗСТАН</option>
+
+  <option value="ЛАОССАЯ НАРОДНО-ДЕМОКРАТИЧЕСКАЯ РЕСПУБЛИКА">ЛАОССАЯ НАРОДНО-ДЕМОКРАТИЧЕСКАЯ РЕСПУБЛИКА</option>
+
+  <option value="ЛИВАН">ЛИВАН</option>
+
+  <option value="ЛЕСОТО">ЛЕСОТО</option>
+
+  <option value="РЕСПУБЛИКА ЛАТВИЯ">РЕСПУБЛИКА ЛАТВИЯ</option>
+
+  <option value="ЛИБЕРИЯ">ЛИБЕРИЯ</option>
+
+  <option value="ЛИВИЙСКАЯ АРАБСКАЯ ДЖАМАХИРИЯ">ЛИВИЙСКАЯ АРАБСКАЯ ДЖАМАХИРИЯ</option>
+
+  <option value="ЛИХТЕНШТЕЙН">ЛИХТЕНШТЕЙН</option>
+
+  <option value="ЛИТВА">ЛИТВА</option>
+
+  <option value="ЛЮКСЕМБУРГ">ЛЮКСЕМБУРГ</option>
+
+  <option value="МАКАО">МАКАО</option>
+
+  <option value="МАДАГАСКАР">МАДАГАСКАР</option>
+
+  <option value="МАЛАВИ">МАЛАВИ</option>
+
+  <option value="МАЛАЙЗИЯ">МАЛАЙЗИЯ</option>
+
+  <option value="МАЛЬДИВЫ">МАЛЬДИВЫ</option>
+
+  <option value="МАЛИ">МАЛИ</option>
+
+  <option value="МАЛЬТА">МАЛЬТА</option>
+
+  <option value="МАРТИНИКА (ФР.)">МАРТИНИКА (ФР.)</option>
+
+  <option value="МАВРИТАНИЯ">МАВРИТАНИЯ</option>
+
+  <option value="МАВРИКИЙ">МАВРИКИЙ</option>
+
+  <option value="МЕКСИКА">МЕКСИКА</option>
+
+  <option value="МОНАКО">МОНАКО</option>
+
+  <option value="МОНГОЛИЯ">МОНГОЛИЯ</option>
+
+  <option value="МОЛДОВА, РЕСПУБЛИКА">МОЛДОВА, РЕСПУБЛИКА</option>
+
+  <option value="ЧЕРНОГОРИЯ">ЧЕРНОГОРИЯ</option>
+
+  <option value="МОНТСЕРРАТ(БРИТ.)">МОНТСЕРРАТ(БРИТ.)</option>
+
+  <option value="МАРОККО">МАРОККО</option>
+
+  <option value="МОЗАМБИК">МОЗАМБИК</option>
+
+  <option value="ОМАН">ОМАН</option>
+
+  <option value="НАМИБИЯ">НАМИБИЯ</option>
+
+  <option value="НАУРУ">НАУРУ</option>
+
+  <option value="НЕПАЛ">НЕПАЛ</option>
+
+  <option value="НИДЕРЛАНДЫ">НИДЕРЛАНДЫ</option>
+
+  <option value="НИДЕРЛАНДСКИЕ АНТИЛЫ">НИДЕРЛАНДСКИЕ АНТИЛЫ</option>
+
+  <option value="КЮРАСАО">КЮРАСАО</option>
+
+  <option value="АРУБА">АРУБА</option>
+
+  <option value="СИНТ-МАРТЕН">СИНТ-МАРТЕН</option>
+
+  <option value="БОНЭЙР, СИНТ-ЭСТАТИУС И САБА">БОНЭЙР, СИНТ-ЭСТАТИУС И САБА</option>
+
+  <option value="НОВАЯ КАЛЕДОНИЯ (ФР.)">НОВАЯ КАЛЕДОНИЯ (ФР.)</option>
+
+  <option value="ВАНУАТУ">ВАНУАТУ</option>
+
+  <option value="НОВАЯ ЗЕЛАНДИЯ">НОВАЯ ЗЕЛАНДИЯ</option>
+
+  <option value="НИКАРАГУА">НИКАРАГУА</option>
+
+  <option value="НИГЕР">НИГЕР</option>
+
+  <option value="НИГЕРИЯ">НИГЕРИЯ</option>
+
+  <option value="НИУЭ">НИУЭ</option>
+
+  <option value="ОСТРОВ НОРФОЛК">ОСТРОВ НОРФОЛК</option>
+
+  <option value="НОРВЕГИЯ">НОРВЕГИЯ</option>
+
+  <option value="СЕВЕРНЫЕ МАРИАНСКИЕ ОСТРОВА (США)">СЕВЕРНЫЕ МАРИАНСКИЕ ОСТРОВА (США)</option>
+
+  <option value="ВНЕШНИЕ МАЛЫЕ ОСТРОВА (США)">ВНЕШНИЕ МАЛЫЕ ОСТРОВА (США)</option>
+
+  <option value="МИКРОНЕЗИЯ, ФЕДЕРАТИВНЫЕ ШТАТЫ">МИКРОНЕЗИЯ, ФЕДЕРАТИВНЫЕ ШТАТЫ</option>
+
+  <option value="МАРШАЛЛОВЫ ОСТРОВА">МАРШАЛЛОВЫ ОСТРОВА</option>
+
+  <option value="ПАЛАУ(США)">ПАЛАУ(США)</option>
+
+  <option value="ПАКИСТАН">ПАКИСТАН</option>
+
+  <option value="ПАНАМА">ПАНАМА</option>
+
+  <option value="ПАПУА-НОВАЯ ГВИНЕЯ">ПАПУА-НОВАЯ ГВИНЕЯ</option>
+
+  <option value="ПАРАГВАЙ">ПАРАГВАЙ</option>
+
+  <option value="ПЕРУ">ПЕРУ</option>
+
+  <option value="ФИЛИППИНЫ">ФИЛИППИНЫ</option>
+
+  <option value="ПИТКЭРН (БРИТ.)">ПИТКЭРН (БРИТ.)</option>
+
+  <option value="ПОЛЬША">ПОЛЬША</option>
+
+  <option value="ПОРТУГАЛИЯ">ПОРТУГАЛИЯ</option>
+
+  <option value="ГВИНЕЯ-БИСАУ">ГВИНЕЯ-БИСАУ</option>
+
+  <option value="ТИМОР-ЛЕСТЕ">ТИМОР-ЛЕСТЕ</option>
+
+  <option value="ПУЭРТО-РИКО">ПУЭРТО-РИКО</option>
+
+  <option value="КАТАР">КАТАР</option>
+
+  <option value="РЕЮНЬОН (ФР.)">РЕЮНЬОН (ФР.)</option>
+
+  <option value="РУМЫНИЯ">РУМЫНИЯ</option>
+
+  <option value="РОССИЯ">РОССИЯ</option>
+
+  <option value="РУАНДА">РУАНДА</option>
+
+  <option value="СЕН-БАРТЕЛЕМИ">СЕН-БАРТЕЛЕМИ</option>
+
+  <option value="ОСТРОВ СВЯТОЙ ЕЛЕНЫ">ОСТРОВ СВЯТОЙ ЕЛЕНЫ</option>
+
+  <option value="СЕНТ-КИТС И НЕВИС">СЕНТ-КИТС И НЕВИС</option>
+
+  <option value="АНГИЛЬЯ (БРИТ.)">АНГИЛЬЯ (БРИТ.)</option>
+
+  <option value="СЕНТ-ЛЮСИЯ">СЕНТ-ЛЮСИЯ</option>
+
+  <option value="СЕН-МАРТЕН">СЕН-МАРТЕН</option>
+
+  <option value="СЕНТ-ПЬЕР И МИКЕЛОН">СЕНТ-ПЬЕР И МИКЕЛОН</option>
+
+  <option value="СЕНТ-ВИНСЕНТ И ГРЕНАДИНЫ">СЕНТ-ВИНСЕНТ И ГРЕНАДИНЫ</option>
+
+  <option value="САН-МАРИНО">САН-МАРИНО</option>
+
+  <option value="САН-ТОМЕ И ПРИНСИПИ">САН-ТОМЕ И ПРИНСИПИ</option>
+
+  <option value="САУДОВСКАЯ АРАВИЯ">САУДОВСКАЯ АРАВИЯ</option>
+
+  <option value="СЕНЕГАЛ">СЕНЕГАЛ</option>
+
+  <option value="СЕРБИЯ">СЕРБИЯ</option>
+
+  <option value="СЕЙШЕЛЫ">СЕЙШЕЛЫ</option>
+
+  <option value="СЬЕРРА-ЛЕОНЕ">СЬЕРРА-ЛЕОНЕ</option>
+
+  <option value="СИНГАПУР">СИНГАПУР</option>
+
+  <option value="СЛОВАКИЯ">СЛОВАКИЯ</option>
+
+  <option value="ВЬЕТНАМ">ВЬЕТНАМ</option>
+
+  <option value="СЛОВЕНИЯ">СЛОВЕНИЯ</option>
+
+  <option value="СОМАЛИ">СОМАЛИ</option>
+
+  <option value="ЮЖНАЯ АФРИКА ">ЮЖНАЯ АФРИКА </option>
+
+  <option value="ЗИМБАБВЕ">ЗИМБАБВЕ</option>
+
+  <option value="ИСПАНИЯ">ИСПАНИЯ</option>
+
+  <option value="ЮЖНЫЙ СУДАН">ЮЖНЫЙ СУДАН</option>
+
+  <option value="СУДАН">СУДАН</option>
+
+  <option value="ЗАПАДНАЯ САХАРА">ЗАПАДНАЯ САХАРА</option>
+
+  <option value="СУРИНАМ">СУРИНАМ</option>
+
+  <option value="ШПИЦБЕРГЕН И ЯН-МАЙЕН">ШПИЦБЕРГЕН И ЯН-МАЙЕН</option>
+
+  <option value="СВАЗИЛЕНД">СВАЗИЛЕНД</option>
+
+  <option value="ШВЕЦИЯ">ШВЕЦИЯ</option>
+
+  <option value="ШВЕЙЦАРИЯ">ШВЕЙЦАРИЯ</option>
+
+  <option value="СИРИЙСКАЯ АРАБСКАЯ РЕСПУБЛИКА">СИРИЙСКАЯ АРАБСКАЯ РЕСПУБЛИКА</option>
+
+  <option value="ТАДЖИКИСТАН">ТАДЖИКИСТАН</option>
+
+  <option value="ТАИЛАНД">ТАИЛАНД</option>
+
+  <option value="ТОГО">ТОГО</option>
+
+  <option value="ТОКЕЛАУ (ЮНИОН) (Н.ЗЕЛ.)">ТОКЕЛАУ (ЮНИОН) (Н.ЗЕЛ.)</option>
+
+  <option value="ТОНГА">ТОНГА</option>
+
+  <option value="ТРИНИДАД И ТОБАГО">ТРИНИДАД И ТОБАГО</option>
+
+  <option value="ОБЪЕДИНЕННЫЕ АРАБСКИЕ ЭМИРАТЫ">ОБЪЕДИНЕННЫЕ АРАБСКИЕ ЭМИРАТЫ</option>
+
+  <option value="ТУНИС">ТУНИС</option>
+
+  <option value="ТУРЦИЯ">ТУРЦИЯ</option>
+
+  <option value="ТУРКМЕНИСТАН">ТУРКМЕНИСТАН</option>
+
+  <option value="ОСТРОВА ТЕРКС И КАЙКОС">ОСТРОВА ТЕРКС И КАЙКОС</option>
+
+  <option value="ТУВАЛУ">ТУВАЛУ</option>
+
+  <option value="УГАНДА">УГАНДА</option>
+
+  <option value="УКРАИНА">УКРАИНА</option>
+
+  <option value="МАКЕДОНИЯ">МАКЕДОНИЯ</option>
+
+  <option value="СССР (ДО СЕНТЯБРЯ 1992 ГОДА)">СССР (ДО СЕНТЯБРЯ 1992 ГОДА)</option>
+
+  <option value="ЕГИПЕТ">ЕГИПЕТ</option>
+
+  <option value="СОЕДИНЕННОЕ КОРОЛЕВСТВО">СОЕДИНЕННОЕ КОРОЛЕВСТВО</option>
+
+  <option value="НОРМАНДСКИЕ ОСТРОВА">НОРМАНДСКИЕ ОСТРОВА</option>
+
+  <option value="ГЕРНСИ">ГЕРНСИ</option>
+
+  <option value="ДЖЕРСИ">ДЖЕРСИ</option>
+
+  <option value="О-В МЕН">О-В МЕН</option>
+
+  <option value="ТАНЗАНИЯ, ОБЪЕДИНЕННАЯ РЕСПУБЛИКА">ТАНЗАНИЯ, ОБЪЕДИНЕННАЯ РЕСПУБЛИКА</option>
+
+  <option value="СОЕДИНЕННЫЕ ШТАТЫ АМЕРИКИ ">СОЕДИНЕННЫЕ ШТАТЫ АМЕРИКИ </option>
+
+  <option value="ВИРГИНСКИЕ ОСТРОВА, США">ВИРГИНСКИЕ ОСТРОВА, США</option>
+
+  <option value="БУРКИНА-ФАСО">БУРКИНА-ФАСО</option>
+
+  <option value="УРУГВАЙ">УРУГВАЙ</option>
+
+  <option value="УЗБЕКИСТАН">УЗБЕКИСТАН</option>
+
+  <option value="ВЕНЕСУЭЛА">ВЕНЕСУЭЛА</option>
+
+  <option value="УОЛЛИС И ФУТУНА">УОЛЛИС И ФУТУНА</option>
+
+  <option value="САМОА">САМОА</option>
+
+  <option value="ЙЕМЕН">ЙЕМЕН</option>
+
+  <option value="ЗАМБИЯ">ЗАМБИЯ</option>
+
+  <option value="ТЕРРИТОРИИ, НЕ УКАЗАННЫЕ В ДРУГИХ МЕСТАХ">ТЕРРИТОРИИ, НЕ УКАЗАННЫЕ В ДРУГИХ МЕСТАХ</option>
+
+  <option value="НЕУКАЗАННЫЕ ТЕРРИТОРИИ">НЕУКАЗАННЫЕ ТЕРРИТОРИИ</option>
+
+</select><small>Справочник Госзакупа. Выберите страну производства товара, а не регистрации бренда.</small></div></div>
+
+<div class="preparation-budget">
+<div><span>Количество</span><strong>1 <small>шт.</small></strong></div>
+<div><span>Бюджет за единицу без НДС</span><strong>100,00 ₸</strong></div>
+<div><span>Бюджет всего без НДС</span><strong>100,00 ₸</strong></div>
+</div>
+
+<div class="preparation-price-input"><label for="id_unit_gross">Наша цена за единицу с НДС, ₸:</label><input type="text" name="unit_gross" inputmode="decimal" autocomplete="off" placeholder="Например, 1160,00" maxlength="32" required id="id_unit_gross"><input type="hidden" name="vat_rate" value="16" disabled id="id_vat_rate"></div>
+<div class="price-calculations" aria-live="polite">
+<div><span>Наша цена за единицу без НДС · для подачи</span><strong data-price-output="unit_net">—</strong> ₸</div>
+<div><span>НДС за единицу</span><strong data-price-output="unit_vat">—</strong> ₸</div>
+<div><span>Наша сумма без НДС · для подачи</span><strong data-price-output="total_net">—</strong> ₸</div>
+<div><span>НДС всего</span><strong data-price-output="total_vat">—</strong> ₸</div>
+<div><span>Наша сумма с НДС</span><strong data-price-output="total_gross">—</strong> ₸</div>
+<p class="error" data-price-budget-error hidden>Наша цена без НДС превышает бюджет. Уменьшите цену за единицу.</p>
+<div class="notice price-rounding" data-price-rounding hidden>
+<strong>Небольшая разница из-за округления</strong>
+<div><span>Введённая цена × количество</span><strong><span data-price-output="desired_total">—</span> ₸</strong></div>
+<div><span>Сумма после пересчёта НДС</span><strong><span data-price-output="total_gross">—</span> ₸</strong></div>
+<div><span>Разница: пересчёт минус исходная сумма</span><strong><span data-price-output="rounding_difference">—</span> ₸</strong></div>
+<p>Цена за единицу без НДС округляется до тиынов. Затем рассчитываются общая сумма и НДС — поэтому итог может немного отличаться. Сверьте его с расчётом на портале.</p>
+</div>
+
+</div>
+<div class="price-discount-confirmation" data-price-discount><p>Снижение на 10% и более от бюджета без НДС. Проверьте условия демпинга и дополнительного обеспечения на портале.</p><label><input type="checkbox" name="confirm_discount" id="id_confirm_discount"><span>Подтверждаю цену со снижением на 10% и более. Условия демпинга на портале проверены.</span></label></div>
+
+
+<p class="step-missing" data-product-missing>Товар и цена заполнены. Сверьте характеристики с требованиями заказчика.</p>
+</section>
+<section class="panel preparation-step" id="prep-step-3">
+<h2>3. Реквизиты для заявки</h2><p class="step-help">БИН 000000000000 · <a href="/settings/#company-settings">Изменить реквизиты организации</a></p>
+<details ><summary>Проверить реквизиты и обеспечение</summary><div class="form-grid"><div class="field"><label for="id_taxpayer_type">Тип налогоплательщика на Госзакупе:</label><select name="taxpayer_type" id="id_taxpayer_type">
+  <option value="" selected>Выберите тип налогоплательщика</option>
+
+  <option value="Юридическое лицо">Юридическое лицо</option>
+
+  <option value="Индивидуальное предпринимательство (совместное)">Индивидуальное предпринимательство (совместное)</option>
+
+  <option value="Юридическое лицо нерезидент">Юридическое лицо нерезидент</option>
+
+</select></div><div class="field"><label for="id_legal_address">Юридический адрес организации:</label><textarea name="legal_address" cols="40" rows="2" maxlength="1000" required id="id_legal_address">
+</textarea></div><div class="field"><label for="id_bank_account">Банковский счёт (ИИК):</label><input type="text" name="bank_account" maxlength="20" required id="id_bank_account"></div><div class="field"><label for="id_contact_phone">Контактный телефон:</label><input type="text" name="contact_phone" maxlength="25" required id="id_contact_phone"></div><div class="field"><label for="id_security">Способ обеспечения:</label><select name="security" id="id_security">
+  <option value="wallet" selected>Деньги с электронного кошелька</option>
+
+  <option value="bank_guarantee">Электронная банковская гарантия</option>
+
+</select></div><div class="field"><label for="id_notes">Заметки к подготовке:</label><textarea name="notes" cols="40" rows="3" maxlength="10000" id="id_notes">
+</textarea></div></div></details>
+<p class="step-missing" data-company-missing>Реквизиты заполнены. Они должны совпадать с данными Госзакупа.</p>
+<div class="preparation-save-bar"><button class="button preparation-cta" type="submit" id="save-preparation">Сохранить товар, цену и реквизиты</button><span data-preparation-save-state>Данные ещё не сохранены</span></div>
+</section></form>
+<div id="prep-step-4" class="preparation-step">
+<section class="panel deal-estimate" id="deal-estimate" data-url="/lots/1/preparation/deal-estimate/">
+<h2>Калькулятор сделки</h2>
+<script id="saved-deal-estimate" type="application/json">{"inputs": {"product_name": "Private monitor", "unit_gross": "116", "procurement_mode": "manual", "purchase_unit_gross": "20", "delivery_mode": "manual", "delivery_gross": "0", "purchase_vat_rate": "0", "purchase_vat_credit": false, "delivery_vat_rate": "0", "delivery_vat_credit": false, "other_costs": "0", "tax_mode": "unknown"}, "snapshot": {"result": {"revenue_net": "100.00", "revenue_gross": "116.00", "output_vat": "16.00", "purchase_gross": "20.00", "purchase_net": "20.00", "purchase_vat_credit": "0", "delivery_net": "0", "delivery_vat_credit": "0", "vat_balance": "16.00", "other_costs": "0", "profit_before_tax": "80.00", "income_tax": null, "profit_after_tax": null, "freeze_cost": "0.00", "economic_profit": null, "refundable_security": "0", "operating_margin_pct": "80.00", "margin_pct": null, "cash_required": "20.00", "tax_mode": "unknown"}, "delivery_gross": "0"}, "commercial_locked": true, "delivery_locked": false, "version": "test-version"}</script>
+<form id="deal-estimate-form" autocomplete="off">
+<input type="hidden" id="deal-product-name" name="product_name"><input type="hidden" id="deal-sale-unit" name="unit_gross">
+<div class="deal-product-summary"><div class="deal-summary-name"><span>Товар из подготовки заявки</span><strong data-deal-product>Не выбран</strong></div><div><span>Количество</span><strong>1 шт.</strong></div><div><span>Цена продажи за единицу</span><strong data-deal-sale>Не указана</strong><small>С учётом НДС вашей организации</small></div></div>
+<div class="deal-block"><h3>Закупка</h3><p class="muted">Сравним склады p1 по достаточному остатку и минимальной стоимости закупки. Или укажите закупочную цену вручную.</p><div class="form-grid">
+<div class="field"><label for="deal-procurement-mode">Источник закупки</label><select id="deal-procurement-mode" name="procurement_mode"><option value="p1">Сравнить склады p1</option><option value="manual">Ввести закупку вручную</option></select></div>
+<div class="field" data-p1-fields><label for="deal-sku">SKU товара Over</label><input id="deal-sku" name="sku" maxlength="100" placeholder="Точный SKU выбранного товара"><small>Подставляется при выборе товара ИИ. Проверьте название в результате сравнения.</small></div>
+<div class="field" data-manual-purchase hidden><label for="deal-purchase">Закупочная цена за единицу, ₸</label><input id="deal-purchase" name="purchase_unit_gross" inputmode="decimal" placeholder="Себестоимость из счёта поставщика"></div>
+
+</div></div>
+<div class="deal-block deal-shipping"><h3>Доставка <span class="deal-service-label">От двери до двери</span></h3>
+<p class="muted" id="deal-location">Читаем место поставки и справочник городов…</p>
+<div class="form-grid">
+<div class="field"><label for="deal-delivery-mode">Стоимость доставки</label><select id="deal-delivery-mode" name="delivery_mode"><option value="jet">Расчёт Jet Logistic</option><option value="manual">Подтверждённая сумма вручную</option></select></div>
+<div class="field" data-manual-delivery hidden><label for="deal-delivery-gross">Доставка всего, ₸</label><input id="deal-delivery-gross" name="delivery_gross" inputmode="decimal" placeholder="Включая налоги перевозчика"></div>
+</div>
+<div class="form-grid" data-jet-fields>
+<div class="field" data-manual-origin><label for="deal-origin">Откуда · склад отправления</label><select id="deal-origin" name="origin"><option value="">Выберите город склада</option></select></div>
+<div class="field" data-p1-fields><label for="deal-local-delivery">Доставка внутри города, всего ₸</label><input id="deal-local-delivery" name="local_delivery_gross" inputmode="decimal" placeholder="Если склад и место поставки в одном городе"><small>Неизвестная стоимость не считается нулевой. Укажите 0 только при подтверждённой бесплатной доставке.</small></div>
+<div class="field"><label for="deal-destination">Куда · место поставки лота</label><select id="deal-destination" name="destination"><option value="">Выберите место поставки</option></select><small>Если адрес неоднозначен, сверьте его с техспецификацией.</small></div>
+<div class="field"><label for="deal-weight">Вес всей отправки с упаковкой, кг</label><input id="deal-weight" name="weight_kg" inputmode="decimal" placeholder="Например, 10"></div>
+<div class="field"><label for="deal-volume">Объём всей отправки с упаковкой, м³</label><input id="deal-volume" name="volume_m3" inputmode="decimal" placeholder="Например, 0,05"></div>
+<div class="field"><label for="deal-packages">Число грузовых мест</label><input id="deal-packages" name="packages" type="number" min="1" step="1" placeholder="Например, 2"></div>
+<div class="field"><label for="deal-cargo">Характер груза</label><select id="deal-cargo" name="cargo_type"><option value="">Выберите характер груза</option></select></div>
+<input type="hidden" id="deal-delivery-option" name="delivery_option" value="door_to_door">
+</div>
+<p class="muted">Тариф Jet Logistic предварительный: включение НДС и адресные доплаты нужно подтвердить у перевозчика. До подтверждения прибыль также предварительная. Заказ на перевозку не создаётся.</p>
+</div>
+<div class="calculator-costs" id="obligation-costs" data-editable="true">
+<script id="obligation-costs-data" type="application/json">[]</script>
+<div class="calculator-costs-heading"><strong>Дополнительные расходы</strong><button type="button" class="outline" data-obligation-add aria-label="Добавить расход">+ Добавить расход</button></div>
+<p class="muted">Подъём, настройка и другие услуги — сумма за весь лот, включая налоги. Пустая сумма означает, что расход ещё не оценён.</p>
+<div data-obligation-rows></div>
+<p><strong>Всего: <span data-obligation-total>—</span></strong></p>
+<p data-obligation-status role="status" aria-live="polite"></p>
+</div>
+
+<details class="deal-advanced"><summary>Налоги и обеспечения · дополнительные настройки</summary><div class="form-grid"><div class="field"><input type="hidden" name="purchase_vat_credit" value="yes"><label for="deal-purchase-vat">НДС закупки к зачёту · ставка в документе поставщика, %</label><input id="deal-purchase-vat" name="purchase_vat_rate" inputmode="decimal" value="16"><small>Показываем один расчёт с зачётом закупочного НДС. Для организации без НДС зачёт не применяется.</small></div>
+<div class="field"><label for="deal-other">Другие расходы, ₸</label><input id="deal-other" name="other_costs" inputmode="decimal" value="0"><small>Расходы, уже добавленные строками выше, здесь повторно не указывайте.</small></div>
+<div class="field"><label for="deal-security">Деньги, замороженные под обеспечения, ₸</label><input id="deal-security" name="refundable_security" inputmode="decimal" value="0"><small>Возвратные деньги — не расход. Для банковской гарантии здесь только реальный залог; комиссию включите в другие расходы.</small></div>
+<div class="field"><label for="deal-days">Срок заморозки обеспечений, дней</label><input id="deal-days" name="freeze_days" inputmode="decimal" value="0"></div>
+<div class="field"><label for="deal-interest">Стоимость денег, % годовых</label><input id="deal-interest" name="annual_money_rate" inputmode="decimal" value="0"></div>
+<div class="field"><label for="deal-tax-mode">Налог на доход</label><select id="deal-tax-mode" name="tax_mode"><option value="unknown">Пока не указан · покажем прибыль до налога</option><option value="profit">От положительной прибыли</option><option value="turnover">От дохода без НДС</option></select></div>
+<div class="field"><label for="deal-tax-rate">Применимая ставка налога, %</label><input id="deal-tax-rate" name="income_tax_rate" inputmode="decimal" placeholder="Укажите по вашему налоговому режиму"><small>Статус плательщика НДС сам по себе не определяет налог на прибыль.</small></div>
+</div></details>
+<div class="actions deal-calculate"><button class="button preparation-cta" type="submit">Рассчитать и сохранить</button><span>Товар и цену меняйте в подготовке заявки выше.</span></div>
+</form><p id="deal-estimate-status" role="status" aria-live="polite"></p><div id="deal-estimate-result"></div>
+</section>
+
+</div>
+<section class="panel preparation-launch preparation-step" id="prep-step-5"><h2>5. Черновик на zakup.gov.kz</h2>
+<p class="step-help">В черновик переносятся реквизиты и описание товара. Цена, обеспечение, подписание и отправка на портале остаются ручными.</p>
+
+
+<button type="button" class="button preparation-cta" id="prepare-with-extension" data-export-url="/lots/1/preparation/export/" data-launch-ready="false" disabled>Сохранить в черновик на zakup.gov.kz</button>
+<p class="step-missing" data-launch-missing></p>
+
+<p id="preparation-bridge-result" role="status" aria-live="polite"></p>
+
+</section>
+<section class="panel preparation-step preparation-next" id="prep-step-6"><h2>6. Подача и ожидание итогов</h2>
+<p>Готовый черновик ещё не является поданной заявкой. На Госзакупе проверьте данные, оформите обеспечение, введите цену, подпишите и отправьте заявку.</p><p>После подтверждения подачи лот перейдёт в «Подали заявку». Если срок истечёт раньше подтверждения, он перейдёт в «Ожидаем итоги»: участие проверяется по БИН.</p>
+<div class="preparation-outcomes"><span>Победа → Заключение договора</span><span>Участвовали, не победили → Проиграли</span><span>Отсутствие участия подтверждено → Не участвовали</span></div>
+</section>
+</div>
+<script defer src="/static/core/preparation_bridge.js"></script>
+<script defer src="/static/core/product-selection.js"></script>
+<script defer src="/static/core/deal-estimate.js"></script>
+<script defer src="/static/core/obligation-costs.js"></script>
+<script defer src="/static/core/preparation-steps.js"></script>
+<script defer src="/static/core/preparation-specification.js"></script>
+</main></body></html>

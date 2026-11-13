@@ -1,4 +1,6 @@
 from tender_search.core import collection_views
+from tender_search.core import deal_views
+from tender_search.core import account_session
 from tender_search.core import draft_queue, shipping
 from django.contrib import admin
 from django.contrib.auth import views as auth_views
@@ -10,9 +12,10 @@ from tender_search.core import views
 from tender_search.core import lead_views
 from tender_search.core import user_admin
 from tender_search.core.extension_views import download_extension, receive_extension_report
-from tender_search.core.preparation import prepare_application, export_preparation, import_portal_status
+from tender_search.core.preparation import prepare_application, export_preparation, import_portal_status, preparation_specification, preparation_product_analysis
 
 urlpatterns = [
+    path('account/session/', account_session.current, name='account_session'),
     path('lots/<int:lot_id>/shipment/', shipping.save, name='shipment_save'),
     path('lots/<int:lot_id>/shipment/act/', shipping.upload_act, name='shipment_act'),
     path('lots/<int:lot_id>/shipment/act/download/', shipping.download_act, name='shipment_act_download'),
@@ -32,11 +35,16 @@ urlpatterns = [
     path("search/", views.search, name="search"),
     path("search/index-status/", views.index_status, name="index_status"),
     path("profiles/<int:profile_id>/delete/", views.profile_delete, name="profile_delete"),
+    path("profiles/<int:profile_id>/rename/", views.profile_rename, name="profile_rename"),
     path("search/<uuid:job_id>/cancel/", views.search_cancel, name="search_cancel"),
     path("search/<uuid:job_id>/", views.search_results, name="search_results"),
     path("lots/ui-state/", views.lot_ui_state, name="lot_ui_state"),
     path("lots/<int:lot_id>/", views.lot_detail, name="lot_detail"),
     path("lots/<int:lot_id>/preparation/", prepare_application, name="application_preparation"),
+    path("lots/<int:lot_id>/preparation/deal-estimate/", deal_views.estimate, name="deal_estimate"),
+    path("lots/<int:lot_id>/preparation/obligations/", deal_views.obligation_costs, name="obligation_costs"),
+    path("lots/<int:lot_id>/preparation/specification/", preparation_specification, name="preparation_specification"),
+    path("lots/<int:lot_id>/preparation/product-analysis/", preparation_product_analysis, name="preparation_product_analysis"),
     path("lots/<int:lot_id>/preparation/export/", export_preparation, name="preparation_export"),
     path("lots/<int:lot_id>/preparation/status/", import_portal_status, name="preparation_status"),
     path("lots/<int:lot_id>/specification/", views.lot_specification_extract, name="lot_specification_extract"),

@@ -23,7 +23,7 @@ class PreparationPriceTests(TestCase):
         page=self.client.get(self.url)
         self.assertContains(page,'Бюджет за единицу без НДС')
         self.assertContains(page,'Количество')
-        self.assertContains(page,'Сохранить подготовку',count=1)
+        self.assertContains(page,'Сохранить товар, цену и реквизиты',count=1)
         self.assertNotContains(page,'Сохранить цену')
         self.assertNotContains(page,'Сохранить данные')
         self.assertContains(page,'id="preparation-form"',count=1)

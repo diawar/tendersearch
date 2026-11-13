@@ -1,0 +1,27 @@
+const fs=require('node:fs'),assert=require('node:assert/strict');
+const {chromium}=require('C:/Users/Dmitriy Small/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright');
+(async()=>{const browser=await chromium.launch({channel:'chrome',headless:true});try{
+ const page=await browser.newPage({viewport:{width:1300,height:1000}}),errors=[];let posted;
+ page.on('pageerror',e=>errors.push(e.message));
+ await page.route('http://calculator.test/**',route=>{if(route.request().method()==='POST'){posted=JSON.parse(route.request().postData());return route.fulfill({status:400,json:{error:'Тестовая проверка'}});}return route.fulfill({json:{cities:[],cargo_types:[],locations:[]}});});
+ await page.setContent('<html lang="ru"><meta charset="utf-8"><main id="fixture"></main></html>');
+ const html=fs.readFileSync('tests/fixtures/preparation.html','utf8');
+ await page.evaluate(html=>{const doc=new DOMParser().parseFromString(html,'text/html');for(const id of ['preparation-form','deal-estimate']){const node=doc.getElementById(id);if(node)document.getElementById('fixture').append(node);}document.getElementById('preparation-form').hidden=true;document.getElementById('deal-estimate').dataset.url='http://calculator.test/deal';},html);
+ await page.addStyleTag({content:fs.readFileSync('src/tender_search/core/static/core/app.css','utf8')});
+ for(const file of ['obligation-costs.js','deal-estimate.js'])await page.addScriptTag({content:fs.readFileSync('src/tender_search/core/static/core/'+file,'utf8')});
+ assert.equal(await page.locator('#deal-estimate-form #obligation-costs').count(),1);
+ assert.equal(await page.locator('#obligation-costs form').count(),0);
+ assert.equal(await page.locator('.obligation-row').count(),1);
+ await page.getByRole('button',{name:'Добавить расход',exact:true}).click();
+ await page.locator('[data-label]').last().fill('Настройка');await page.locator('[data-amount]').last().fill('30');
+ assert.match(await page.locator('[data-obligation-total]').textContent(),/45,00/);
+ await page.locator('#deal-procurement-mode').selectOption('manual');
+ await page.locator('#deal-purchase').fill('100');await page.evaluate(()=>{const field=document.querySelector('#preparation-form [name=unit_gross]');field.value='200';field.dispatchEvent(new Event('input',{bubbles:true}));});assert.match(await page.locator('[data-deal-sale]').textContent(),/200,00/);assert.equal(await page.locator('[name=delivery_option]').inputValue(),'door_to_door');assert.equal(await page.locator('select[name=delivery_option]').count(),0);await page.locator('#deal-delivery-mode').selectOption('manual');await page.locator('#deal-delivery-gross').fill('0');
+ await page.locator('#deal-estimate-form button[type=submit]').click();await page.waitForFunction(()=>document.getElementById('deal-estimate-status').textContent.includes('Тестовая'));
+ assert.equal(posted.obligations.length,2);assert.equal(posted.obligations[1].label,'Настройка');assert.equal(posted.obligations[1].amount,'30');
+ await page.evaluate(()=>document.getElementById('deal-estimate').scrollIntoView({block:'start'}));await page.screenshot({path:'data/calculator-layout-top.png'});
+ await page.locator('#obligation-costs').scrollIntoViewIfNeeded();await page.screenshot({path:'data/calculator-costs-desktop.png'});
+ await page.setViewportSize({width:390,height:844});await page.locator('#obligation-costs').scrollIntoViewIfNeeded();assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+ await page.screenshot({path:'data/calculator-costs-mobile.png'});
+ assert.deepEqual(errors,[]);console.log('PASS: expenses inline in calculator, saved rows, plus adds cost, total updates, estimate sends all costs, mobile layout');
+}finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1;});

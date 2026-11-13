@@ -1,8 +1,9 @@
-(()=>{
+window.initializeDraftQueue=()=>{
  const rows=[...document.querySelectorAll('[data-queue-id]')],output=document.querySelector('#queue-message');
+ if(!output||output.dataset.queueBound)return;output.dataset.queueBound='true';
  const csrf=document.querySelector('#queue-csrf [name=csrfmiddlewaretoken]').value;
  const channel='goszakup-preparation-bridge-v1';
- let extensionId,autoSupported=false,checkSupported=false,resetSupported=false,busy=false,polling=false,last='',automatic=false,activeRow=null,stopping=false,launchError='';
+ let extensionId,autoSupported=false,checkSupported=false,resetSupported=false,preflightSupported=false,busy=false,polling=false,last='',automatic=false,activeRow=null,stopping=false,launchError='';
  const checkButton=document.querySelector('#queue-check');
  const runButton=document.querySelector('#queue-run'),stopButton=document.querySelector('#queue-stop');
  const canLaunch=row=>row.dataset.inputReady!=='false'&&!['complete','cancelled','running','waiting'].includes(row.dataset.state);
@@ -13,7 +14,8 @@
   for(const row of rows){
    const working=['running','waiting'].includes(row.dataset.state);
    const start=row.querySelector('.queue-start');if(start)start.disabled=!canLaunch(row)||automatic||busy||stopping;
-   const remove=row.querySelector('.queue-remove');if(remove)remove.disabled=working;
+   const remove=row.querySelector('.queue-remove');if(remove)remove.disabled=working||automatic||busy||stopping;
+   const star=row.querySelector('.favorite-icon');if(star)star.disabled=working||automatic||busy||stopping;
    const edit=row.querySelector('.queue-prepare');if(edit){if(working){edit.setAttribute('aria-disabled','true');edit.setAttribute('tabindex','-1');}else{edit.removeAttribute('aria-disabled');edit.removeAttribute('tabindex');}}
   }
  };
@@ -29,7 +31,7 @@
   timer=setTimeout(()=>{done();extensionId=undefined;reject(Error('Нет ответа расширения на этой вкладке. Проверьте, что оно включено в этом профиле Chrome и имеет доступ к сайту приложения.'));},type==='ping'?1800:type==='queue-check'?65000:12000);
   window.postMessage({channel,id,type,extensionId,...extra},location.origin);
  });
- const connect=async()=>{if(!extensionId){const result=await bridge('ping');extensionId=result.extensionId;autoSupported=result.autoQueue===true;checkSupported=result.queueCheck===true;resetSupported=result.queueReset===true;if(!extensionId)throw Error('Расширение не найдено.');}};
+ const connect=async()=>{if(!extensionId){const result=await bridge('ping');extensionId=result.extensionId;preflightSupported=result.draftPreflight===true;autoSupported=result.autoQueue===true;checkSupported=result.queueCheck===true;resetSupported=result.queueReset===true;if(!extensionId)throw Error('Расширение не найдено.');}};
  const post=async(url,data,isForm=false)=>{
   const address=new URL(url,location.href);if(address.origin!==location.origin)throw Error('Неверный адрес очереди.');
   const response=await fetch(address.href,{method:'POST',credentials:'same-origin',headers:{'X-CSRFToken':csrf,...(isForm?{}:{'Content-Type':'application/json'})},body:isForm?data:JSON.stringify(data)});
@@ -37,7 +39,7 @@
   const value=await response.json();if(!response.ok||value.error)throw Error(value.error||'Данные очереди недоступны.');return value;
  };
  async function poll(){
-  if(polling||busy||!rows.length)return;polling=true;
+  if(!output.isConnected||polling||busy||!rows.length)return;polling=true;
   try{
    await connect();const result=await bridge('queue-status');
    if(!result.snapshot||!result.queue_context){
@@ -47,7 +49,7 @@
      row.querySelector('.queue-state').textContent='Запуск не подтверждён браузером';
      row.querySelector('.queue-detail').textContent='Проверьте существующую заявку на Госзакупе перед продолжением. Последнее состояние сохранено в очереди.';
     }
-    output.textContent=unfinished.length?'Связь с расширением установлена. Проверьте незавершённый лот перед продолжением.':'Расширение подключено. Нажмите «Запустить очередь».';
+    output.textContent=unfinished.length?'Связь с расширением установлена. Проверьте незавершённый лот перед продолжением.':'Расширение подключено. Нажмите «3. Создать все готовые черновики».';
     return;
    }
    const row=rows.find(r=>r.dataset.queueId===String(result.queue_context.id)&&r.dataset.generation===result.queue_context.generation);
@@ -73,6 +75,7 @@
   launchError='';busy=true;controls();const button=row.querySelector('.queue-start');if(button)button.disabled=true;
   try{
    await connect();
+   if(!preflightSupported)throw Error('Обновите расширение до 0.18.0: перед запуском обязательна проверка существующих черновиков.');
    if(autoStart&&!autoSupported)throw Error('Для автоматической очереди обновите расширение до 0.10.0 и перезагрузите эту страницу.');
    const current=await bridge('queue-status');
    if(['running','waiting'].includes(current.snapshot?.status))throw Error('Сначала завершите или остановите текущий лот в расширении.');
@@ -88,7 +91,7 @@
   }finally{busy=false;controls();}
  }
  async function next(){
-  if(!automatic||busy||polling)return;
+  if(!output.isConnected||!automatic||busy||polling)return;
   const row=rows.find(canLaunch);
   if(!row){automatic=false;activeRow=null;controls();output.textContent=rows.some(r=>!['complete','cancelled'].includes(r.dataset.state))?'Готовых к запуску лотов нет. Заполните данные в «Подготовке».':'Очередь завершена. Результаты всех черновиков сохранены.';return;}
   try{await launch(row,true);if(row.dataset.state==='cancelled')void next();}catch(error){automatic=false;controls();launchError=error.message;output.textContent=launchError;}
@@ -129,5 +132,10 @@
   }catch(error){launchError=error.message;output.textContent=launchError;}
   finally{busy=false;controls();}
  });
- controls();void poll();setInterval(()=>void poll(),4000);
-})();
+ window.reconcileDraftQueue=()=>{for(let i=rows.length-1;i>=0;i--)if(!rows[i].isConnected)rows.splice(i,1);if(output.isConnected)controls();};
+ controls();void poll();const interval=setInterval(()=>{if(!output.isConnected){clearInterval(interval);return;}void poll();},4000);
+};
+window.initializeDraftQueue();
+document.addEventListener('htmx:afterSwap',()=>window.initializeDraftQueue());
+
+document.addEventListener('workflow:changed',()=>window.reconcileDraftQueue?.());

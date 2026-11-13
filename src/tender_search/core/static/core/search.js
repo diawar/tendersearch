@@ -263,6 +263,7 @@ document.addEventListener('htmx:beforeRequest',event=>{
  }
  const channel=typeof BroadcastChannel==='function'?new BroadcastChannel('lot-state-'+owner):null;
  if(channel)channel.onmessage=()=>{if(workspaceInFlight)workspaceMutation=true;schedule(true);};
+ document.addEventListener('workflow:changed',()=>{schedule(true);channel?.postMessage('changed');});
  document.addEventListener('htmx:beforeSend',event=>{
   if(event.detail.elt?.id==='collection-workspace'){workspaceInFlight=true;workspaceMutation=false;}
  });

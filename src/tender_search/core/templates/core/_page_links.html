@@ -1,0 +1,11 @@
+{% if links %}
+<nav class="pagination numbered-pagination" aria-label="Страницы результатов">
+  {% if previous_url %}<a href="{{ previous_url }}" aria-label="Предыдущая страница">← Назад</a>{% endif %}
+  {% for item in links %}
+    {% if item.current %}<span class="pagination-current" aria-current="page">{{ item.number }}</span>
+    {% elif item.number %}<a href="{{ item.url }}" aria-label="Страница {{ item.number }}">{{ item.number }}</a>
+    {% else %}<span class="pagination-ellipsis" aria-hidden="true">…</span>{% endif %}
+  {% endfor %}
+  {% if next_url %}<a href="{{ next_url }}" aria-label="Следующая страница">Далее →</a>{% endif %}
+</nav>
+{% endif %}

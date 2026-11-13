@@ -67,14 +67,16 @@ def update_collection(profile_id, lease, revision):
             if not current:
                 return
             now = timezone.now()
-            hits = list(job.hits.values('lot_id', 'terms'))
+            from .models import PurgedUserLot
+            purged=PurgedUserLot.objects.filter(owner_id=current.owner_id).values('lot_id')
+            hits = list(job.hits.exclude(lot_id__in=purged).values('lot_id', 'terms'))
             old = {item.lot_id: item for item in CollectionLot.objects.filter(profile=current)}
             if not old:
                 # Recover important lots from searches explicitly tied to this
                 # saved filter, including already expired favorites.
                 important = Q(lot_id__in=Favorite.objects.filter(owner=current.owner).values('lot_id')) | Q(
                     lot__announcement_id__in=AnnouncementWatch.objects.filter(owner=current.owner, enabled=True).values('announcement_id'))
-                historical = SearchHit.objects.filter(search__owner=current.owner).filter(
+                historical = SearchHit.objects.filter(search__owner=current.owner).exclude(lot_id__in=purged).filter(
                     Q(search__specification__profile_id=current.pk) | Q(search__specification__monitor_profile_id=current.pk)).filter(important)
                 seeds = {}
                 for hit in historical.order_by('-search__created_at').values('lot_id', 'terms'):

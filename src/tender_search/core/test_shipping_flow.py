@@ -26,7 +26,7 @@ class ShippingFlowTests(TestCase):
         output=BytesIO();writer.write(output)
         return SimpleUploadedFile('act.pdf',output.getvalue(),content_type='application/pdf')
 
-    def test_courier_act_payment_archive_and_shared_download(self):
+    def test_courier_act_payment_and_private_download(self):
         url=reverse('shipment_save',args=[self.lot.pk])
         self.client.post(url,{'mode':'courier','courier':'CDEK','tracking_number':'TEST123'})
         shipment=LotShipment.objects.get(owner=self.owner,lot=self.lot)
@@ -39,12 +39,37 @@ class ShippingFlowTests(TestCase):
         download=reverse('shipment_act_download',args=[self.lot.pk])+f'?act={shipment.pk}'
         self.client.force_login(self.other)
         response=self.client.get(download)
+        self.assertEqual(response.status_code,404)
+        from .shipping import context
+        self.assertFalse(context(self.other,self.lot)['personal_acts'].exists())
+        self.assertEqual(list(context(self.owner,self.lot)['personal_acts']),[shipment])
+        self.assertNotContains(self.client.get(reverse('lot_detail',args=[self.lot.pk])),download)
+        self.client.force_login(self.owner)
+        response=self.client.get(download)
         self.assertEqual(response.status_code,200)
+        self.assertEqual(response['Cache-Control'],'no-store, private')
         self.assertTrue(b''.join(response.streaming_content).startswith(b'%PDF-'))
         self.assertNotEqual(UserLotWorkflow.objects.get(owner=self.other,lot=self.lot).stage,'payment')
         with self.assertRaises(ValueError):advance(self.owner.pk,self.lot.pk,'paid')
         self.assertEqual(self.stage(),'payment')
         self.assertTrue(LotShipment.objects.get(pk=shipment.pk).act)
+
+    def test_two_users_have_separate_acts_for_same_lot(self):
+        from django.utils import timezone
+        from .shipping import context
+        first=LotShipment.objects.create(owner=self.owner,lot=self.lot,act=self.pdf(),act_uploaded_at=timezone.now())
+        second=LotShipment.objects.create(owner=self.other,lot=self.lot,act=self.pdf(),act_uploaded_at=timezone.now())
+        self.assertNotEqual(first.act.name,second.act.name)
+        self.assertEqual(list(context(self.owner,self.lot)['personal_acts']),[first])
+        self.assertEqual(list(context(self.other,self.lot)['personal_acts']),[second])
+        base=reverse('shipment_act_download',args=[self.lot.pk])
+        self.assertEqual(self.client.get(base+f'?act={second.pk}').status_code,404)
+        self.client.force_login(self.other)
+        response=self.client.get(base+f'?act={second.pk}')
+        self.assertEqual(response.status_code,200)
+        self.assertTrue(b''.join(response.streaming_content).startswith(b'%PDF-'))
+        for value in ('','invalid','9'*100):
+            self.assertEqual(self.client.get(base+'?act='+value).status_code,404)
 
     def test_invalid_upload_and_act_before_dispatch_cannot_move_stage(self):
         endpoint=reverse('shipment_act',args=[self.lot.pk])

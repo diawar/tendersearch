@@ -130,7 +130,7 @@ class ContractWorkflowTests(TestCase):
         LotShipment.objects.create(owner=self.owner,lot=self.lot,act='private-acts/accepted.pdf')
         for target in ('contract','delivery','payment','paid'):
             self.run_check({'state':target,'number':'contract','status':'status'})
-            self.assertEqual(self.state.stage,'archived' if target=='paid' else target)
+            self.assertEqual(self.state.stage,'won' if target=='paid' else target)
             self.assertEqual(self.state.outcome,'won')
         self.assertTrue(self.state.completed_at)
         self.assertFalse(LotOutcomeWatch.objects.get(pk=self.verdict.pk).enabled)

@@ -68,7 +68,7 @@ class WorkflowNotificationTests(TestCase):
             deliver_workflow_notifications();deliver_workflow_notifications()
         send.assert_called_once();self.assertIn('Договор подписан',send.call_args.args[1]['text'])
 
-    def test_paid_notification_survives_automatic_archive_and_stopped_watches(self):
+    def test_paid_notification_survives_completion_and_stopped_watches(self):
         self.won()
         result={'state':'paid','contract_id':90,'number':'900','status':'Executed'}
         self.contract_check(result)
@@ -76,13 +76,13 @@ class WorkflowNotificationTests(TestCase):
         LotShipment.objects.create(owner=self.owner,lot=self.lot,mode='own',act='accepted.pdf',shipped_at=timezone.now(),act_uploaded_at=timezone.now())
         self.contract_check(result)
         state=UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot)
-        self.assertEqual(state.stage,'archived');self.assertTrue(state.completed_at)
+        self.assertEqual(state.stage,'won');self.assertTrue(state.completed_at)
         self.assertFalse(LotOutcomeWatch.objects.get(owner=self.owner,lot=self.lot).enabled)
         with patch('tender_search.core.workflow_notifications.telegram_api',return_value={'message_id':3}) as send:
             deliver_workflow_notifications();deliver_workflow_notifications()
         send.assert_called_once();self.assertIn('Оплата получена',send.call_args.args[1]['text'])
 
-    def test_nonparticipation_final_message_survives_watch_shutdown(self):
+    def test_nonparticipation_moves_silently_and_cancels_legacy_message(self):
         self.lot.announcement.deadline=timezone.now()-timedelta(minutes=1);self.lot.announcement.save()
         enroll_participation_checks()
         watch=LotOutcomeWatch.objects.get(owner=self.owner,lot=self.lot)
@@ -92,9 +92,13 @@ class WorkflowNotificationTests(TestCase):
             check_outcome(watch.pk,'test')
         schedule_outcomes()
         watch.refresh_from_db();self.assertFalse(watch.enabled)
+        self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'not_participated')
+        from .models import OutcomeDelivery
+        self.assertFalse(OutcomeDelivery.objects.filter(watch=watch,state='pending').exists())
+        old=OutcomeDelivery.objects.create(watch=watch,generation=watch.generation,revision=watch.revision,event_key='legacy-absence',payload={'text':'Не участвовали'})
         with patch('tender_search.core.outcome_service.telegram_api',return_value={'message_id':4}) as send:
             deliver_outcomes();deliver_outcomes()
-        send.assert_called_once();self.assertIn('Не участвовали',send.call_args.args[1]['text'])
+        send.assert_not_called();old.refresh_from_db();self.assertEqual(old.state,'cancelled')
 
     def test_unwanted_new_lot_messages_are_cancelled(self):
         self.profile.enabled=True;self.profile.save()

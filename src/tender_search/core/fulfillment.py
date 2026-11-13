@@ -43,6 +43,20 @@ def complete_payment(owner_id, lot_id):
     return _advance(owner_id, lot_id, 'paid', automatic=True)
 
 
+def archive_completed_wins():
+    """Keep paid wins visible for 30 days, measured from confirmed payment."""
+    from .models import UserLotWorkflow
+    cutoff = timezone.now() - timedelta(days=30)
+    due = UserLotWorkflow.objects.filter(stage='won', completed_at__lte=cutoff)
+    for owner_id, lot_id in list(due.order_by('completed_at', 'pk').values_list('owner_id', 'lot_id')[:100]):
+        with transaction.atomic():
+            list(SearchProfile.objects.select_for_update().filter(owner_id=owner_id).order_by('pk'))
+            state = UserLotWorkflow.objects.select_for_update().filter(
+                owner_id=owner_id, lot_id=lot_id, stage='won', completed_at__lte=cutoff).first()
+            if state and CollectionLot.objects.filter(profile__owner_id=owner_id, lot_id=lot_id).exists():
+                _advance(owner_id, lot_id, 'archive')
+
+
 def _advance(owner_id, lot_id, action, *, automatic=False):
     with transaction.atomic():
         list(SearchProfile.objects.select_for_update().filter(owner_id=owner_id).order_by('pk'))
@@ -71,7 +85,7 @@ def _advance(owner_id, lot_id, action, *, automatic=False):
                 raise ValueError('Не удалось определить этап для восстановления.')
             tracking = state.archived_result_tracking and previous in ('won','lost','payment')
             update_workflow(owner_id,lot_id,stage=previous,result_tracking=tracking,
-                archived_at=None,archived_from_stage='',archived_result_tracking=False,completed_at=None)
+                archived_at=None,archived_from_stage='',archived_result_tracking=False,completed_at=state.completed_at)
             if tracking:
                 # Keep the known verdict: restoring must not send the same result again.
                 LotOutcomeWatch.objects.filter(owner_id=owner_id,lot_id=lot_id).update(
@@ -79,9 +93,11 @@ def _advance(owner_id, lot_id, action, *, automatic=False):
             from .contract_service import invalidate
             invalidate(owner_id, lot_id)
         elif action in ('archive','paid'):
-            update_workflow(owner_id,lot_id,stage='archived',result_tracking=False,
-                archived_from_stage=previous,archived_result_tracking=state.result_tracking,
-                archived_at=timezone.now(),completed_at=timezone.now() if action == 'paid' else None)
+            update_workflow(owner_id,lot_id,stage='won' if action == 'paid' else 'archived',result_tracking=False,
+                archived_from_stage=previous if action == 'archive' else '',
+                archived_result_tracking=state.result_tracking if action == 'archive' else False,
+                archived_at=timezone.now() if action == 'archive' else None,
+                completed_at=timezone.now() if action == 'paid' else state.completed_at)
             pause_outcome(owner_id,lot_id)
             from .models import ContractWatch
             ContractWatch.objects.filter(workflow=state).update(generation=secrets.token_hex(16),lease='',lease_until=None,next_check_at=None)

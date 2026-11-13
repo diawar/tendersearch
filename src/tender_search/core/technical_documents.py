@@ -23,14 +23,16 @@ def cache_file(lot, file, api):
         if version.search_text is None:
             version.save(update_fields=['text'])
         return version
-    result = api.download(file, Path(settings.MEDIA_ROOT), max_bytes=20*1024*1024)
-    version, _ = DocumentVersion.objects.update_or_create(document=doc, sha256=result['sha256'],
-        defaults={'storage_path': str(result['path'])})
-    text, truncated = extract_text(result['path'], file.name)
-    version.text = text
-    version.pages = [{'truncated': truncated}]
-    version.save(update_fields=['text', 'pages', 'updated_at'])
-    Document.objects.filter(pk=doc.pk).update(status='ready', error='')
+    from .storage_lifecycle import publish_download
+    with publish_download(api,file,max_bytes=20*1024*1024) as result:
+        version, _ = DocumentVersion.objects.update_or_create(document=doc, sha256=result['sha256'],
+            defaults={'storage_path': str(result['path'])})
+        text, truncated = extract_text(result['path'], file.name)
+        version.text = text
+        version.pages = [{'truncated': truncated}]
+        version.save(update_fields=['text', 'pages', 'updated_at'])
+        Document.objects.filter(pk=doc.pk).update(status='ready', error='')
+
     return version
 
 

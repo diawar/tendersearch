@@ -25,7 +25,28 @@ class FulfillmentTests(TestCase):
     def state(self):
         return UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot)
 
-    def test_confirmed_payment_archives_preserving_price_note_and_stopping_checks(self):
+    def test_paid_win_archives_only_after_30_days_from_completion(self):
+        from datetime import timedelta
+        from .fulfillment import archive_completed_wins
+        now = timezone.now()
+        completed = now - timedelta(days=29, hours=23)
+        update_workflow(self.owner.pk,self.lot.pk,stage='won',outcome='won',result_tracking=False,completed_at=completed)
+        archive_completed_wins()
+        self.assertEqual(self.state().stage,'won')
+        with patch('tender_search.core.fulfillment.timezone.now',return_value=now+timedelta(hours=1)):
+            archive_completed_wins()
+        self.assertEqual(self.state().stage,'archived')
+        self.assertEqual(self.state().completed_at,completed)
+        self.assertEqual(self.state().archived_from_stage,'won')
+        self.assertFalse(LotOutcomeWatch.objects.get(owner=self.owner,lot=self.lot).enabled)
+        self.assertEqual(CollectionLot.objects.get(profile__owner=self.other,lot=self.lot).stage,'preparing')
+
+    def test_unpaid_win_is_not_archived_by_timer(self):
+        from .fulfillment import archive_completed_wins
+        archive_completed_wins()
+        self.assertEqual(self.state().stage,'won')
+
+    def test_confirmed_payment_completes_as_won_preserving_price_note_and_stopping_checks(self):
         from .models import LotShipment,ContractWatch
         from .fulfillment import complete_payment
         UserLotNote.objects.create(owner=self.owner,lot=self.lot,text='Saved note')
@@ -34,14 +55,14 @@ class FulfillmentTests(TestCase):
         with self.assertRaises(ValueError):complete_payment(self.owner.pk,self.lot.pk)
         ContractWatch.objects.create(workflow=state,state='paid',evidence={'state':'paid'},checked_at=timezone.now())
         complete_payment(self.owner.pk,self.lot.pk)
-        self.assertEqual(self.state().stage,'archived')
+        self.assertEqual(self.state().stage,'won')
         self.assertTrue(self.state().completed_at)
         self.assertTrue(UserLotPrice.objects.get(owner=self.owner,lot=self.lot).locked_at)
-        self.assertFalse(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
+        self.assertTrue(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
         self.assertFalse(AnnouncementWatch.objects.get(owner=self.owner,announcement=self.lot.announcement).enabled)
         self.assertFalse(LotOutcomeWatch.objects.get(owner=self.owner,lot=self.lot).enabled)
         self.assertEqual(UserLotNote.objects.get(owner=self.owner,lot=self.lot).text,'Saved note')
-        self.assertEqual(CollectionLot.objects.get(profile__owner=self.other,lot=self.lot).stage,'interesting')
+        self.assertEqual(CollectionLot.objects.get(profile__owner=self.other,lot=self.lot).stage,'preparing')
 
     def test_manual_automatic_transitions_rejected_on_every_stage_and_view(self):
         from .fulfillment import actions_for

@@ -13,7 +13,7 @@
 {% if price_has_vat %}<div><span>НДС всего</span><strong data-price-output="total_vat">{{ price_result.total_vat|floatformat:'2g'|default:'—' }}</strong> ₸</div>{% endif %}
 <div><span>Наша сумма {% if price_has_vat %}с НДС{% else %}без НДС{% endif %}</span><strong data-price-output="total_gross">{{ price_result.total_gross|floatformat:'2g'|default:'—' }}</strong> ₸</div>
 <p class="error" data-price-budget-error hidden>Наша цена без НДС превышает бюджет. Уменьшите цену за единицу.</p>
-<p class="notice" data-price-rounding hidden>Из-за округления итог отличается от введённой цены × количество (<span data-price-output="desired_total">—</span> ₸) на <span data-price-output="rounding_difference">—</span> ₸.</p>
+{% include 'core/_price_rounding.html' %}
 </div>
-{% if price_budget %}<div class="price-discount-confirmation" data-price-discount><p>Снижение на 10% и более от бюджета без НДС. Проверьте условия демпинга и дополнительного обеспечения на портале.</p><label>{{ price_form.confirm_discount }} {{ price_form.confirm_discount.label }}</label>{{ price_form.confirm_discount.errors }}</div>
+{% if price_budget %}<div class="price-discount-confirmation" data-price-discount><p>Снижение на 10% и более от бюджета без НДС. Проверьте условия демпинга и дополнительного обеспечения на портале.</p><label>{{ price_form.confirm_discount }}<span>{{ price_form.confirm_discount.label }}</span></label>{{ price_form.confirm_discount.errors }}</div>
 {% else %}<p class="error">Бюджет без НДС или количество не подтверждены. Цену пока сохранить нельзя.</p>{% endif %}

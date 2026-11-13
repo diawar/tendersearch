@@ -51,14 +51,21 @@ def extract_text(path, name):
 
 
 def queue_specification(owner, lot):
+    from django.db import transaction
+    from .models import PurgedUserLot,SearchProfile
     from .tasks import extract_lot_specification
-    job,_=LotSpecification.objects.get_or_create(owner=owner,lot=lot)
-    if job.state in ('queued','running') and job.generation and job.updated_at>timezone.now()-timedelta(minutes=15):return
-    generation=secrets.token_hex(16)
-    LotSpecification.objects.filter(pk=job.pk).update(state='queued',generation=generation,error='',updated_at=timezone.now())
-    try:extract_lot_specification.delay(job.pk,generation)
-    except Exception:
-        LotSpecification.objects.filter(pk=job.pk,generation=generation).update(state='error',error='Очередь извлечения недоступна. Повторите позже.')
+    with transaction.atomic():
+        list(SearchProfile.objects.select_for_update().filter(owner=owner).order_by('pk'))
+        if PurgedUserLot.objects.filter(owner=owner,lot=lot).exists():return
+        job,_=LotSpecification.objects.get_or_create(owner=owner,lot=lot)
+        if job.state in ('queued','running') and job.generation and job.updated_at>timezone.now()-timedelta(minutes=15):return
+        generation=secrets.token_hex(16)
+        LotSpecification.objects.filter(pk=job.pk).update(state='queued',generation=generation,error='',updated_at=timezone.now())
+        def enqueue():
+            try:extract_lot_specification.delay(job.pk,generation)
+            except Exception:
+                LotSpecification.objects.filter(pk=job.pk,generation=generation).update(state='error',error='Очередь извлечения недоступна. Повторите позже.')
+        transaction.on_commit(enqueue)
 
 
 def process_specification(job_id, generation):

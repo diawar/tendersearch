@@ -33,7 +33,7 @@ def queue_event(owner_id, lot, company_bin, kind, reference, label=None):
     contract=f'Договор № {label}. ' if label else ''
     detail={'submitted': f'Заявка № {label}. Подача подтверждена на Госзакупе.',
             'signed': contract+'Подписание договора подтверждено; лот перешёл в поставку.',
-            'paid': contract+'Подтверждены полное исполнение и оплата. Лот завершён и перенесён в архив.'}[kind]
+            'paid': contract+'Подтверждены полное исполнение и оплата. Лот завершён и перенесён в «Выиграли».'}[kind]
     payload={'text':f'<b>{TITLES[kind]}</b>\n\nЛот: <code>{esc(lot.number)}</code>\n<b>{esc(lot.name[:500])}</b>\nБИН: <code>{esc(company_bin)}</code>\n\n{esc(detail)}',
              'parse_mode':'HTML','link_preview_options':{'is_disabled':True},
              'reply_markup':{'inline_keyboard':[[{'text':'Открыть на Госзакупе ↗','url':lot.portal_url}]]}}
@@ -52,9 +52,9 @@ def deliver_workflow_notifications():
         workflow=UserLotWorkflow.objects.filter(owner_id=delivery.owner_id,lot_id=delivery.lot_id).first()
         bin_matches=CompanySettings.objects.filter(owner_id=delivery.owner_id,company_bin=delivery.company_bin).exists()
         relevant=bool(workflow and (
-            (delivery.kind=='submitted' and workflow.stage=='applied') or
+            (delivery.kind=='submitted' and workflow.stage in ('applied','waiting_results')) or
             (delivery.kind=='signed' and workflow.stage=='delivery' and workflow.outcome=='won') or
-            (delivery.kind=='paid' and workflow.stage=='archived' and workflow.completed_at)))
+            (delivery.kind=='paid' and workflow.stage in ('won','archived') and workflow.completed_at)))
         sub=TelegramSubscription.objects.filter(owner_id=delivery.owner_id,enabled=True,chat_id__isnull=False).first()
         if not delivery.owner.is_active or not bin_matches or not relevant or not sub or delivery.created_at<now-timedelta(days=1):
             WorkflowDelivery.objects.filter(pk=delivery.pk,state='pending').update(state='cancelled')

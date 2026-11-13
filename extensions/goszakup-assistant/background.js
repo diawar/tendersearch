@@ -3,18 +3,60 @@ let running=false;
 let transferring=false;
 const key='draftJob';
 const readJob=async()=> (await chrome.storage.session.get(key))[key]||null;
-const recoveryKey=packet=>'draftRecovery:'+packet.company_bin+':'+packet.announcement_number+':'+packet.lot_number;
+const accountsKey='appAccounts';
+const readAccounts=async()=> (await chrome.storage.session.get(accountsKey))[accountsKey]||{};
+const accountRevisions=new Map();
+function trustedAccountSender(sender){try{return sender.id===chrome.runtime.id&&sender.frameId===0&&Number.isInteger(sender.tab?.id)&&globalThis.GOSZAKUP_APP_ORIGINS?.includes(new URL(sender.url).origin);}catch{return false;}}
+async function clearPrivateJob(){await chrome.alarms.clear('draft-recovery');await chrome.storage.session.remove(key);}
+async function bindAccount(account,sender,revision){
+ const origin=new URL(sender.url).origin;
+ const unchanged=()=>{if(accountRevisions.get(origin)!==revision)throw Error('Учётная запись проверяется заново. Повторите действие.');};
+ unchanged();
+ if(!account||account.origin!==origin||typeof account.authenticated!=='boolean'||(account.authenticated&&(!/^[a-f0-9]{40}$/.test(account.scope)||!/^[a-f0-9]{40}$/.test(account.account))))throw Error('Аккаунт приложения не подтверждён.');
+ const accounts=await readAccounts(),next={scope:account.authenticated?account.scope:'',account:account.authenticated?account.account:'',tabId:sender.tab.id};
+ const job=await readJob();unchanged();if(job&&(!job.accountScope||job.appOrigin===origin&&job.accountScope!==next.scope))await clearPrivateJob();
+ unchanged();if(JSON.stringify(accounts[origin])!==JSON.stringify(next)){accounts[origin]=next;await chrome.storage.session.set({[accountsKey]:accounts});}
+ unchanged();
+ return {...next,revision};
+}
+async function freshAccount(sender){
+ const origin=new URL(sender.url).origin,revision=(accountRevisions.get(origin)||0)+1;accountRevisions.set(origin,revision);
+ const current=await chrome.tabs.sendMessage(sender.tab.id,{type:'account:verify'});
+ if(current?.error)throw Error('Не удалось проверить аккаунт приложения.');
+ return bindAccount(current,sender,revision);
+}
+async function verifyBoundJob(job){
+ if(!job)return false;
+ if(!job.accountScope||!job.appOrigin){await clearPrivateJob();return false;}
+ const bound=(await readAccounts())[job.appOrigin];
+ if(!bound||bound.scope!==job.accountScope){await clearPrivateJob();return false;}
+ const current=await freshAccount({url:job.appOrigin,id:chrome.runtime.id,frameId:0,tab:{id:bound.tabId}});
+ const latest=await readJob(),binding=(await readAccounts())[job.appOrigin];
+ return current.revision===accountRevisions.get(job.appOrigin)&&current.scope===job.accountScope&&binding?.scope===job.accountScope&&latest?.accountScope===job.accountScope;
+}
+async function authorizeSender(message,sender){
+ const account=await freshAccount(sender);
+ if(!account.scope||message.account?.scope!==account.scope)throw Error('Учётная запись изменилась. Обновите страницу приложения.');
+ return account;
+}
+const legacyRecoveryKey=packet=>'draftRecovery:'+packet.company_bin+':'+packet.announcement_number+':'+packet.lot_number;
+const recoveryKey=packet=>packet.app_account?'draftRecovery:'+packet.app_account+':'+legacyRecoveryKey(packet):legacyRecoveryKey(packet);
 async function recovery(packet){
  const record=(await chrome.storage.local.get(recoveryKey(packet)))[recoveryKey(packet)];
+ if(!record&&packet.app_account&&(await chrome.storage.local.get(legacyRecoveryKey(packet)))[legacyRecoveryKey(packet)])return {number:'',createUncertain:true};
  const number=record?.number||packet.existing_application_number||'';
  if(number&&!/^\d+$/.test(number))throw Error('Некорректный сохранённый номер черновика.');
  return {number,createUncertain:record?.createUncertain===true};
 }
 const writeJob=async job=>{
+ if(job.accountScope&&(await readAccounts())[job.appOrigin]?.scope!==job.accountScope)throw Error('Учётная запись изменилась. Заполнение остановлено.');
  // Persist the minimal duplicate guard before an action, without product or bank data.
  if(job.number||job.createUncertain)await chrome.storage.local.set({[recoveryKey(job.packet)]:{number:job.number||'',createUncertain:job.createUncertain===true}});
  else if(job.createUncertain===false)await chrome.storage.local.remove(recoveryKey(job.packet));
- await chrome.storage.session.set({[key]:job});return job;
+ if(job.accountScope&&(await readAccounts())[job.appOrigin]?.scope!==job.accountScope)throw Error('Учётная запись изменилась. Заполнение остановлено.');
+ await chrome.storage.session.set({[key]:job});
+ if(job.accountScope&&(await readAccounts())[job.appOrigin]?.scope!==job.accountScope){if((await readJob())?.accountScope===job.accountScope)await clearPrivateJob();throw Error('Учётная запись изменилась. Заполнение остановлено.');}
+ return job;
 };
 const retryAlarm='draft-recovery';
 const retryDelays=[1,2,4,8,15,15,15,15];
@@ -33,6 +75,7 @@ async function resumeRecovery(){
  const job=await readJob();if(!job||job.stop||job.status!=='waiting')return;
  running=true;
  try{
+  if(!await verifyBoundJob(job))return;
   await writeJob({...job,status:'running',message:'Проверяем восстановление и существующий черновик…'});
   await new Promise((resolve,reject)=>{
    let timer;
@@ -48,6 +91,7 @@ async function resumeRecovery(){
 }
 chrome.alarms.onAlarm.addListener(alarm=>{if(alarm.name===retryAlarm)void resumeRecovery();});
 async function injected(job,action){
+ if(!await verifyBoundJob(job))throw Error('Учётная запись изменилась. Заполнение остановлено.');
  const rows=await chrome.scripting.executeScript({target:{tabId:job.tabId},func:runDraftStep,
   args:[job.packet,action,{applicationNumber:job.number||'',lotConfirmed:job.lotConfirmed===true}]});
  if(rows.length!==1||!rows[0].result)throw Error('Ответ страницы не получен. Проверьте черновик на портале.');
@@ -68,8 +112,40 @@ async function navigatePortal(job,address){
   chrome.tabs.update(job.tabId,{url:url.href}).catch(done);
  });
 }
+async function loadPortalTab(tabId,url){
+ await chrome.tabs.update(tabId,{url});
+ for(let n=0;n<150;n++){const tab=await chrome.tabs.get(tabId);if(tab.status==='complete')return;await new Promise(resolve=>setTimeout(resolve,200));}
+ throw Error('Страница проверки не загрузилась. Новый черновик не создаётся.');
+}
+async function preflightDraft(){
+ let job=await readJob();if(!job||job.stop||!await verifyBoundJob(job))return false;
+ await writeJob({...job,status:'running',phase:'portal',message:'Проверяем «Мои заявки» перед запуском. Создание нового черновика пока запрещено.'});
+ let tab;
+ try{
+  tab=await chrome.tabs.create({active:false,url:'https://zakup.gov.kz/cabinet/purchase/my-applications'});
+  for(let n=0;n<150;n++){if((await chrome.tabs.get(tab.id)).status==='complete')break;if(n===149)throw Error('Кабинет не загрузился. Проверка не выполнена.');await new Promise(resolve=>setTimeout(resolve,200));}
+  if(!await verifyBoundJob(job))return false;
+  const target={company_bin:job.packet.company_bin,announcement_number:job.packet.announcement_number,lot_number:job.packet.lot_number,number:job.number||job.packet.existing_application_number||''};
+  const rows=await chrome.scripting.executeScript({target:{tabId:tab.id},func:checkSavedApplication,args:[target]});
+  if(!await verifyBoundJob(job))return false;
+  const current=await readJob();if(!current||current.stop)return false;job=current;
+  const decision=draftPreflightDecision(job,rows.length===1?rows[0].result:null);
+  if(decision.action==='block'){await writeJob({...job,status:'blocked',message:decision.message});return false;}
+  if(decision.action==='wait'){await waitRecovery({...job,absenceConfirmedAt:decision.confirmAbsence?(job.absenceConfirmedAt||Date.now()):null},decision.message);return false;}
+  const number=decision.action==='resume'?decision.number:'';
+  job={...job,number,packet:{...job.packet,existing_application_number:number},createUncertain:false,absenceConfirmedAt:null,
+   lotConfirmed:decision.action==='resume'&&job.number===number&&job.lotConfirmed===true,
+   message:number?'Найден черновик № '+number+'. Продолжаем его; новый не создаём.':'Портал подтвердил отсутствие заявок по объявлению. Продолжаем создание черновика.'};
+  await writeJob(job);
+  if(!await verifyBoundJob(job)||(await readJob())?.stop)return false;
+  await loadPortalTab(job.tabId,'https://zakup.gov.kz/cabinet/announcement/'+job.packet.announcement_external_id);
+  return true;
+ }catch(error){job=await readJob();if(job&&!job.stop){const message='Проверка перед запуском не выполнена. Новый черновик не создаётся. '+error.message;if(/не загрузил|Frame.*removed|document.*unloaded|Cannot access contents|network|net::/i.test(error.message))await waitRecovery({...job,absenceConfirmedAt:null},message);else await writeJob({...job,status:'blocked',message});}return false;}
+ finally{if(tab)try{await chrome.tabs.remove(tab.id);}catch{}}
+}
 async function runJob(){
  try{
+  if(!await preflightDraft())return;
   for(let step=0;step<24;step++){
    let job=await readJob();if(!job||job.stop) return;
    const probe=await injected(job,'probe');
@@ -88,7 +164,7 @@ async function runJob(){
    if(!probe.next)throw Error('Не определён следующий шаг. Продолжите вручную.');
    const current=await readJob();if(current?.stop)return;
    job={...job,status:'running',intent:probe.next,phase:({open_form:'portal',fill_account:'account',save_account:'account',add_lot:'lot',advance_lots:'lot',open_description:'description',edit_description:'description',fill_description:'description',save_description:'description'})[probe.next]||job.phase||'portal',message:probe.message,
-    createUncertain:job.createUncertain||(probe.next==='save_account'&&!job.number)};
+    createUncertain:job.createUncertain||(probe.next==='save_account'&&!job.number),absenceConfirmedAt:null};
    await writeJob(job); // Durable intent before any portal action.
    const result=await injected(job,probe.next);
    // A confirmed preflight refusal means no create click happened. Transport
@@ -116,19 +192,17 @@ async function runJob(){
  }finally{running=false;}
 }
 async function command(message){
+ if(!['draft:get','draft:load'].includes(message.type)){const job=await readJob();if(job&&!await verifyBoundJob(job))return null;}
  if(transferring&&['draft:load','draft:start','draft:clear'].includes(message.type))throw Error('Дождитесь завершения передачи из приложения.');
  if(message.type==='draft:get'){
   const job=await readJob();
+  if(job&&!await verifyBoundJob(job))return null;
   if(job?.status==='running'&&!running){await waitRecovery(job,'Обработка прервалась. Перед продолжением проверим существующий черновик.');return readJob();}
   if(job?.status==='waiting'&&job.nextRetryAt)await chrome.alarms.create(retryAlarm,{when:Math.max(Date.now()+1000,job.nextRetryAt)});
   return job;
  }
  if(message.type==='draft:load'){
-  if(running||(await readJob())?.status==='waiting')throw Error('Сначала остановите текущее заполнение.');
-  validateDraftPacket(message.packet);
-  const old=await readJob();
-  if(old?.createUncertain)throw Error('Есть неподтверждённая попытка создания. Проверьте её на портале перед очисткой подготовки.');
-  return writeJob({packet:message.packet,status:'ready',message:'Подготовка загружена. Откройте нужное объявление.',...await recovery(message.packet),lotConfirmed:false});
+  throw Error('Передайте подготовку из текущего аккаунта приложения.');
  }
  if(message.type==='draft:stop'){
   await chrome.alarms.clear(retryAlarm);
@@ -168,6 +242,7 @@ function trustedPreparationSender(sender){
  }catch{return false;}
 }
 async function receivePreparation(message,sender){
+ const account=await authorizeSender(message,sender);
  if(running||transferring)throw Error('Сначала завершите или остановите текущее заполнение в расширении.');
  transferring=true;
  try{
@@ -176,7 +251,7 @@ async function receivePreparation(message,sender){
   validateDraftPacket(message.packet);
   const old=await readJob();
   if(old?.createUncertain&&(old.packet.company_bin!==message.packet.company_bin||old.packet.lot_number!==message.packet.lot_number||old.packet.announcement_number!==message.packet.announcement_number))throw Error('Проверьте на портале предыдущую неподтверждённую попытку создания черновика.');
-  const packet=message.packet;
+  const packet={...message.packet,app_account:account.account};
   const queue=message.queue_context;
   if(message.auto_start===true&&!queue)throw Error('Автозапуск доступен только из очереди.');
   if(queue&&(!Number.isSafeInteger(queue.id)||queue.id<1||!/^[-a-f0-9]{36}$/.test(queue.generation)||new URL(sender.url).pathname!=='/workspace/drafts/'))throw Error('Некорректный пункт очереди.');
@@ -186,8 +261,8 @@ async function receivePreparation(message,sender){
    if(record.createUncertain)throw Error('Есть неподтверждённая попытка создания. Проверьте её отдельно.');
    if(record.number===packet.reset_absent_application)await chrome.storage.local.remove(recoveryKey(packet));
   }
-  const same=!packet.reset_absent_application&&old?.packet?.company_bin===packet.company_bin&&old?.packet?.announcement_number===packet.announcement_number&&old?.packet?.lot_number===packet.lot_number;
-  await writeJob({packet,status:'ready',message:'Подготовка получена из приложения. Нажмите «Создать / продолжить черновик» на вкладке Госзакупа.',
+  const same=old?.accountScope===account.scope&&!packet.reset_absent_application&&old?.packet?.company_bin===packet.company_bin&&old?.packet?.announcement_number===packet.announcement_number&&old?.packet?.lot_number===packet.lot_number;
+  await writeJob({packet,accountScope:account.scope,status:'ready',message:'Подготовка получена из приложения. Нажмите «Создать / продолжить черновик» на вкладке Госзакупа.',
    ...await recovery(packet),number:(same?old.number:'')||(await recovery(packet)).number,lotConfirmed:same&&old.lotConfirmed===true,appOrigin:new URL(sender.url).origin,queue_context:queue||null});
   let opened=false;
   try{
@@ -214,9 +289,14 @@ async function receivePreparation(message,sender){
  }finally{transferring=false;}
 }
 chrome.runtime.onMessage.addListener((message,sender,respond)=>{
+ if(message?.type==='bridge:account'){
+  if(!trustedAccountSender(sender))return false;
+  freshAccount(sender).then(()=>respond({bound:true}),error=>respond({error:error.message}));return true;
+ }
  if(message?.type==='bridge:queue-check'){
   if(!trustedPreparationSender(sender)||new URL(sender.url).pathname!=='/workspace/drafts/')return false;
   (async()=>{
+   await authorizeSender(message,sender);
    if(running||transferring||['running','waiting'].includes((await readJob())?.status))throw Error('Сначала остановите заполнение очереди.');
    transferring=true;
    try{
@@ -229,7 +309,9 @@ chrome.runtime.onMessage.addListener((message,sender,respond)=>{
      const timer=setTimeout(()=>done(Error('Кабинет не загрузился.')),30000);chrome.tabs.onUpdated.addListener(listener);
      chrome.tabs.get(tab.id).then(current=>{if(current.status==='complete')done();},done);
     });
+    await authorizeSender(message,sender);
     const results=await chrome.scripting.executeScript({target:{tabId:tab.id},func:checkSavedApplication,args:[t]});
+    await authorizeSender(message,sender);
     if(results.length!==1||!results[0].result)throw Error('Ответ проверки не получен.');
     return {result:results[0].result};
    }finally{transferring=false;}
@@ -237,15 +319,17 @@ chrome.runtime.onMessage.addListener((message,sender,respond)=>{
  }
  if(message?.type==='bridge:queue-stop'){
   if(!trustedPreparationSender(sender)||new URL(sender.url).pathname!=='/workspace/drafts/')return false;
-  readJob().then(job=>{
+  authorizeSender(message,sender).then(()=>readJob()).then(job=>{
    if(job?.appOrigin!==new URL(sender.url).origin)throw Error('Очередь другого приложения.');
+   if(job.accountScope!==message.account.scope)throw Error('Очередь другого аккаунта.');
    return command({type:'draft:stop'});
   }).then(()=>respond({stopped:true}),error=>respond({error:error.message}));return true;
  }
  if(message?.type==='bridge:queue-status'){
   if(!trustedPreparationSender(sender)||new URL(sender.url).pathname!=='/workspace/drafts/')return false;
-  command({type:'draft:get'}).then(job=>{
+  authorizeSender(message,sender).then(()=>command({type:'draft:get'})).then(job=>{
    if(!job?.queue_context||job.appOrigin!==new URL(sender.url).origin){respond({snapshot:null});return;}
+   if(job.accountScope!==message.account.scope){respond({snapshot:null});return;}
    respond({queue_context:job.queue_context,snapshot:{status:job.status,number:job.number||'',message:job.message||'',
     intent:job.intent||'',phase:job.phase||'',company_bin:job.packet.company_bin,announcement_number:job.packet.announcement_number,lot_number:job.packet.lot_number,
     lotConfirmed:job.lotConfirmed===true,description_saved:job.status==='complete',observed_at:job.observedAt||null}});

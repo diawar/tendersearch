@@ -25,7 +25,7 @@ def invalidate(owner_id, lot_id=None):
 def schedule_contracts():
     from .tasks import check_lot_contract
     now = timezone.now()
-    states = UserLotWorkflow.objects.filter(owner__is_active=True, outcome='won', stage__in=STAGES)
+    states = UserLotWorkflow.objects.filter(owner__is_active=True, outcome='won', stage__in=STAGES, completed_at__isnull=True)
     for state in states.filter(contractwatch__isnull=True)[:100]:
         ContractWatch.objects.get_or_create(workflow=state, defaults={'company_bin': company_bin_for(state.owner_id)})
     due = ContractWatch.objects.filter(workflow__in=states).filter(
@@ -59,7 +59,7 @@ def check_contract(watch_id, lease):
     company_bin = company_bin_for(state.owner_id)
     verdict = confirmed_outcome(state, company_bin, now) if company_bin else None
     try:
-        if state.stage not in STAGES or state.outcome != 'won':
+        if state.stage not in STAGES or state.outcome != 'won' or state.completed_at:
             return
         try:
             if not company_bin:

@@ -1,4 +1,4 @@
-"""Personal delivery state with shared acceptance documents."""
+"""Personal delivery state and acceptance documents, restricted to their owner."""
 from pathlib import Path
 from uuid import uuid4
 
@@ -33,11 +33,11 @@ class ShipmentForm(forms.ModelForm):
 
 def context(owner, lot):
     state = lot.workflow if hasattr(lot, 'workflow') else UserLotWorkflow.objects.filter(owner=owner, lot=lot).first()
-    shared = {'shared_acts': LotShipment.objects.filter(lot=lot).exclude(act='').order_by('-act_uploaded_at')}
+    personal = {'personal_acts': LotShipment.objects.filter(owner=owner, lot=lot).exclude(act='').order_by('-act_uploaded_at')}
     if not state or state.stage not in ('delivery', 'payment', 'archived'):
-        return shared
+        return personal
     shipment = LotShipment.objects.filter(owner=owner, lot=lot).first()
-    return {**shared, 'shipment': shipment, 'shipment_form': ShipmentForm(instance=shipment),
+    return {**personal, 'shipment': shipment, 'shipment_form': ShipmentForm(instance=shipment),
             'shipment_editable': state.stage == 'delivery'}
 
 
@@ -79,31 +79,54 @@ def upload_act(request, lot_id):
     if not valid:
         messages.error(request, 'Содержимое файла не соответствует формату акта.')
         return redirect('lot_detail', lot_id=lot_id)
-    with transaction.atomic():
-        list(SearchProfile.objects.select_for_update().filter(owner=request.user).order_by('pk'))
-        state = get_object_or_404(UserLotWorkflow.objects.select_for_update(), owner=request.user, lot_id=lot_id)
-        shipment = LotShipment.objects.filter(owner=request.user, lot_id=lot_id).first()
-        if state.stage != 'delivery' or not shipment or not shipment.shipped_at:
-            messages.error(request, 'Сначала сохраните сведения об отправке на этапе «Поставка».')
-            return redirect('lot_detail', lot_id=lot_id)
-        old = shipment.act.name
-        shipment.act.save(uuid4().hex + suffix, upload, save=False)
-        shipment.act_uploaded_at = timezone.now()
-        shipment.save()
-        accept_uploaded_act(request.user.pk, lot_id)
-        if old:
-            storage = shipment.act.storage
-            transaction.on_commit(lambda: storage.delete(old))
+    from .archive_retention import enqueue_file,drain_file_deletions
+    from .models import StoredFileDeletion
+    field=LotShipment._meta.get_field('act');storage=field.storage
+    name=field.generate_filename(LotShipment(owner=request.user,lot_id=lot_id),uuid4().hex+suffix)
+    # Commit the cleanup intent BEFORE writing bytes: it survives a DB rollback.
+    intent=enqueue_file('act',name)
+    written=None
+    try:
+        with transaction.atomic():
+            lease=StoredFileDeletion.objects.select_for_update().filter(pk=intent.pk).first()
+            if lease is None:
+                messages.error(request,'Повторите загрузку акта.')
+                return redirect('lot_detail',lot_id=lot_id)
+            transaction.on_commit(drain_file_deletions)
+            list(SearchProfile.objects.select_for_update().filter(owner=request.user).order_by('pk'))
+            state = get_object_or_404(UserLotWorkflow.objects.select_for_update(), owner=request.user, lot_id=lot_id)
+            shipment = LotShipment.objects.filter(owner=request.user, lot_id=lot_id).first()
+            if state.stage != 'delivery' or not shipment or not shipment.shipped_at:
+                messages.error(request, 'Сначала сохраните сведения об отправке на этапе «Поставка».')
+                return redirect('lot_detail', lot_id=lot_id)
+            old=shipment.act.name
+            written=storage.save(name,upload)
+            shipment.act=written
+            shipment.act_uploaded_at=timezone.now()
+            shipment.save()
+            accept_uploaded_act(request.user.pk,lot_id)
+            if old:enqueue_file('act',old)
+            lease.delete()
+    except Exception:
+        # A backend may choose a different filename. Keep that intent as well.
+        if written and written!=name:enqueue_file('act',written)
+        drain_file_deletions()
+        raise
     messages.success(request, 'Акт сохранён. Лот перемещён в «Оплата».')
     return redirect('lot_detail', lot_id=lot_id)
 
 
 @login_required
 def download_act(request, lot_id):
-    shipment = get_object_or_404(LotShipment, pk=request.GET.get('act'), lot_id=lot_id)
+    act_id = request.GET.get('act', '')
+    if not act_id.isdecimal() or len(act_id) > 18:
+        raise Http404
+    shipment = get_object_or_404(LotShipment, pk=act_id, lot_id=lot_id, owner=request.user)
     if not shipment.act:
         raise Http404
     try:
-        return FileResponse(shipment.act.open('rb'), as_attachment=True, filename='act' + Path(shipment.act.name).suffix)
+        response = FileResponse(shipment.act.open('rb'), as_attachment=True, filename='act' + Path(shipment.act.name).suffix)
+        response['Cache-Control'] = 'no-store, private'
+        return response
     except FileNotFoundError:
         raise Http404

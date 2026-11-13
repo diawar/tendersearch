@@ -1,3 +1,4 @@
+{% if lot.workflow.stage == 'waiting_results' %}<p class="muted">Ожидаем итоги · проверка участия по БИН продолжается.</p>{% endif %}
 {% if lot.workflow.stage in 'won,lost,contract,delivery,payment' %}<p class="muted">Этап: {{ lot.workflow.get_stage_display }}</p>{% endif %}
 {% if lot.contract_watch %}
 {% if lot.contract_watch.error %}<p role="status">{{ lot.contract_watch.error }}</p>{% endif %}
@@ -9,7 +10,7 @@
 {% if lot.workflow_actions %}
 <div class="interest-actions">
 {% for action in lot.workflow_actions %}
-<form method="post" action="{% url 'workspace_action' lot_id=lot.pk %}">
+<form method="post" data-workflow-action action="{% url 'workspace_action' lot_id=lot.pk %}">
 {% csrf_token %}
 <input type="hidden" name="next" value="{{ request.get_full_path }}">
 <button class="outline" type="submit" name="action" value="{{ action.value }}">{{ action.label }}</button>

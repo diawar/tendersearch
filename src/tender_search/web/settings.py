@@ -90,7 +90,9 @@ CELERY_TASK_TIME_LIMIT = 300
 CELERY_RESULT_EXPIRES = 3600
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TASK_ROUTES = {
+    'tender_search.core.tasks.analyze_preparation_product': {'queue': 'product-analysis'},
     'tender_search.core.tasks.web_search': {'queue': 'interactive'},
+    'tender_search.core.tasks.extract_lot_specification': {'queue': 'specifications'},
 }
 USE_LOCAL_INDEX = True
 LEAD_COLLECTION_AVAILABLE = False
@@ -99,6 +101,11 @@ SEARCH_CANDIDATE_CACHE = False
 SEARCH_CACHE_TTL = 120
 SEARCH_CACHE_MAX_CANDIDATES = 10000
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY','')
+# The app's explicit Analyze action is allowed. Codex follows the separate chat policy.
+OPENAI_CHAT_ONLY = False
+P1_API_TOKEN = os.getenv('P1_API_TOKEN', '')
+OPENAI_MODEL = os.getenv('OPENAI_MODEL') or 'gpt-6-luna'
 LOGGING = {"version": 1, "disable_existing_loggers": False,
            "handlers": {"console": {"class": "logging.StreamHandler"}},
            "root": {"handlers": ["console"], "level": "INFO"}}

@@ -2,14 +2,14 @@ const assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('nod
 const generation='11111111-1111-4111-8111-111111111111';
 const button={disabled:false,addEventListener(type,fn){this.click=fn;}};
 const nodes={'.queue-start':button,'.queue-repeat':{checked:false},'.queue-state':{},'.queue-detail':{},'.queue-remove':{}};
-const row={dataset:{queueId:'1',generation,state:'queued',packetUrl:'/workspace/drafts/1/packet/',progressUrl:'/workspace/drafts/1/progress/'},querySelector:s=>nodes[s]};
-const output={},listeners=new Set(),requests=[];let snapshot=null,contextQueue=null,tick,sequence=0;
+const row={isConnected:true,dataset:{queueId:'1',generation,state:'queued',packetUrl:'/workspace/drafts/1/packet/',progressUrl:'/workspace/drafts/1/progress/'},querySelector:s=>nodes[s]};
+const output={dataset:{},isConnected:true},listeners=new Set(),requests=[];let snapshot=null,contextQueue=null,tick,sequence=0;
 const window={addEventListener:(type,fn)=>listeners.add(fn),removeEventListener:(type,fn)=>listeners.delete(fn),postMessage(data){
- const reply=data.type==='ping'?{type:'ready',extensionId:'test'}:data.type==='queue-status'?{type:'result',snapshot,queue_context:contextQueue}:{type:'result',prepared:true,opened:true};
+ const reply=data.type==='ping'?{type:'ready',draftPreflight:true,extensionId:'test'}:data.type==='queue-status'?{type:'result',snapshot,queue_context:contextQueue}:{type:'result',prepared:true,opened:true};
  if(data.type==='prepare'){snapshot={status:'ready',company_bin:'241040001415',lot_number:'88537093-ЗЦП1',announcement_number:'17920228-1'};contextQueue=data.queue_context;}
  queueMicrotask(()=>{for(const fn of [...listeners])fn({source:window,origin:'http://localhost:8000',data:{channel:data.channel,id:data.id,...reply}});});
 }};
-const context={window,document:{querySelectorAll:()=>[row],querySelector:s=>s==='#queue-message'?output:s==='#queue-csrf [name=csrfmiddlewaretoken]'?{value:'csrf'}:null},location:{origin:'http://localhost:8000',href:'http://localhost:8000/workspace/drafts/'},crypto:{randomUUID:()=>('a'.repeat(25)+String(++sequence))},URL,JSON,FormData,setTimeout,clearTimeout,setInterval:fn=>tick=fn,
+const context={window,document:{addEventListener(){},querySelectorAll:()=>[row],querySelector:s=>s==='#queue-message'?output:s==='#queue-csrf [name=csrfmiddlewaretoken]'?{value:'csrf'}:null},location:{origin:'http://localhost:8000',href:'http://localhost:8000/workspace/drafts/'},crypto:{randomUUID:()=>('a'.repeat(25)+String(++sequence))},URL,JSON,FormData,setTimeout,clearTimeout,setInterval:fn=>tick=fn,
  fetch:async(url,options)=>{
   requests.push({url,options});
   return {ok:true,redirected:false,json:async()=>url.endsWith('/packet/')?{packet:{lot_number:'88537093-ЗЦП1'},queue_context:{id:1,generation}}:{saved:true,state:snapshot.status,label:snapshot.status==='complete'?'Черновик готов':'Передано в расширение'}};

@@ -1,19 +1,20 @@
 """Personal preparation only. No authenticated portal requests or submissions."""
 from django import forms
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.shortcuts import get_object_or_404, render, redirect
 from django.views.decorators.http import require_http_methods
-from django.http import JsonResponse
 import json
 import re
 from urllib.parse import urlsplit
 from datetime import timedelta
 from django.utils import timezone
+from django.http import JsonResponse
 from django.utils.dateparse import parse_datetime
-from .models import ApplicationPreparation, CompanySettings, UserLotWorkflow, Lot, SearchProfile
+from .models import ApplicationPreparation, CompanySettings, UserLotWorkflow, Lot, SearchProfile, CollectionLot
 from .company_choices import TAXPAYER_TYPES
 from .goszakup_countries import COUNTRY_CHOICES, canonical_country
 
@@ -80,7 +81,7 @@ def draft_position_count(lot):
 def prepare_application(request, lot_id, price_form=None):
     lot=get_object_or_404(Lot.objects.select_related('announcement'),pk=lot_id)
     workflow=get_object_or_404(UserLotWorkflow,owner=request.user,lot=lot)
-    if workflow.stage not in ('interesting','preparing','applied','won','lost','contract','delivery','payment','archived'):
+    if workflow.stage not in ('interesting','preparing','applied','waiting_results','won','lost','contract','delivery','payment','archived','not_participated'):
         raise PermissionDenied
     saved=ApplicationPreparation.objects.filter(owner=request.user,lot=lot).first()
     from .models import DraftQueueItem
@@ -138,11 +139,114 @@ def prepare_application(request, lot_id, price_form=None):
     if not editable and price_context.get('price_form'):
         price_context['price_editable']=False
         for field in price_context['price_form'].fields.values():field.disabled=True
-    response=render(request,'core/application_preparation.html',{'lot':lot,'form':form,'preparation':saved,**price_context,
+    from .product_ai import configured
+    specification_context=preparation_specification_context(request.user,lot,auto_load=workflow.stage=='preparing')
+    positions=draft_position_count(lot) if export_supported and editable else None
+    from .preparation_steps import context as steps_context
+    steps=steps_context(form=form,saved=saved,company=company,workflow=workflow,pricing=price_context,
+        specification=specification_context,editable=editable,positions=positions)
+    from .obligation_costs import context as obligation_context
+    from .deal_snapshot import context as deal_context
+    response=render(request,'core/application_preparation.html',{'lot':lot,'form':form,'preparation':saved,**price_context,**steps,**deal_context(request.user,lot),
+        **specification_context,
+        **obligation_context(request.user,lot,specification_context['specification_documents']),
+        'product_ai_configured':configured(),
+        'product_ai_chat_only':getattr(settings,'OPENAI_CHAT_ONLY',True),
         'export_supported':export_supported,
-        'draft_registry_positions':draft_position_count(lot) if export_supported and editable else None,
+        'decline_item_id':CollectionLot.objects.filter(profile__owner=request.user,lot=lot,stage='preparing').values_list('pk',flat=True).first() if workflow.stage=='preparing' else None,
+        'draft_registry_positions':positions,
         'company_bin':company_bin,'preparation_busy':preparation_busy,'editable':editable,'bin_changed':bool(saved and saved.company_bin!=company_bin)})
     response['Cache-Control']='no-store, private'
+    return response
+
+
+def preparation_specification_context(owner,lot,*,auto_load=False):
+    """Read shared specifications for this lot only; keep form rendering offline."""
+    from django.db.models import OuterRef,Subquery,Q
+    from .models import DocumentVersion,LotSpecification
+    job=LotSpecification.objects.filter(owner=owner,lot=lot).first()
+    latest=DocumentVersion.objects.filter(document_id=OuterRef('document_id')).order_by('-pk').values('pk')[:1]
+    versions=DocumentVersion.objects.filter(document__announcement_id=lot.announcement_id,
+        document__kind='technical',pk=Subquery(latest)).filter(
+        Q(document__lot_id=lot.pk)|Q(document__lot_id__isnull=True)).exclude(text='').order_by('pk')
+    documents=[{'name':v.document.name,'text':v.text,'source_url':v.document.url,
+        'scope':'lot' if v.document.lot_id else 'announcement',
+        'truncated':bool(v.pages and v.pages[0].get('truncated'))}
+        for v in versions.select_related('document')[:8]]
+    pending=bool(job and job.state in ('queued','running'))
+    error=job.error if job else ''
+    if pending and job.updated_at<=timezone.now()-timedelta(minutes=15):
+        pending=False
+        error='Извлечение не завершилось вовремя. Повторите загрузку.'
+    if not documents and job:documents=job.documents
+    return {'specification_documents':documents,'specification_pending':pending,
+        'specification_state':job.state if pending else '',
+        'specification_error':error,
+        'specification_auto_load':bool(auto_load and not job and not documents)}
+
+
+@login_required
+@require_http_methods(['GET','POST'])
+def preparation_specification(request,lot_id):
+    workflow=get_object_or_404(UserLotWorkflow.objects.select_related('lot__announcement'),
+        owner=request.user,lot_id=lot_id,
+        stage__in=('interesting','preparing','applied','waiting_results','won','lost','contract','delivery','payment','archived'))
+    if request.method=='POST':
+        from .specification_service import queue_specification
+        queue_specification(request.user,workflow.lot)
+    response=render(request,'core/_preparation_specification.html',{
+        'lot':workflow.lot,**preparation_specification_context(request.user,workflow.lot)})
+    response['Cache-Control']='no-store, private'
+    return response
+
+
+@login_required
+@require_http_methods(['GET','POST'])
+def preparation_product_analysis(request,lot_id):
+    from .product_ai import configured,VERSION
+    from .models import ProductAnalysis,DraftQueueItem,UserLotPrice
+    from .lot_pricing import attach_lot_budgets,price_budget
+    workflow=get_object_or_404(UserLotWorkflow.objects.select_related('lot__announcement'),
+        owner=request.user,lot_id=lot_id,stage='preparing')
+    if request.method=='POST':
+        if not configured():
+            from .product_ai import unavailable_reason
+            return JsonResponse({'error':unavailable_reason(),'ai_configured':False},status=409)
+        if DraftQueueItem.objects.filter(owner=request.user,lot_id=lot_id,state__in=('running','waiting')).exists() or UserLotPrice.objects.filter(owner=request.user,lot_id=lot_id,locked_at__isnull=False).exists():
+            return JsonResponse({'error':'Сначала остановите заполнение черновика. Зафиксированную цену менять нельзя.'},status=409)
+        attach_lot_budgets([workflow.lot])
+        if not price_budget(workflow.lot):
+            return JsonResponse({'error':'Количество или бюджет лота не подтверждены.'},status=409)
+        specification=preparation_specification_context(request.user,workflow.lot)
+        if not specification['specification_documents']:
+            return JsonResponse({'error':'Сначала дождитесь загрузки технической спецификации.'},status=409)
+        import secrets
+        from .tasks import analyze_preparation_product
+        with transaction.atomic():
+            job,_=ProductAnalysis.objects.get_or_create(owner=request.user,lot_id=lot_id,defaults={'generation':''})
+            job=ProductAnalysis.objects.select_for_update().get(pk=job.pk)
+            if job.state not in ('queued','running') or not job.generation or job.updated_at<timezone.now()-timedelta(minutes=6):
+                job.generation=secrets.token_hex(16);job.state='queued';job.error='';job.save()
+                def dispatch(pk=job.pk,generation=job.generation):
+                    try:analyze_preparation_product.delay(pk,generation)
+                    except Exception:ProductAnalysis.objects.filter(pk=pk,generation=generation).update(state='error',error='Очередь подбора недоступна. Повторите позже.')
+                transaction.on_commit(dispatch)
+    job=ProductAnalysis.objects.filter(owner=request.user,lot_id=lot_id).first()
+    data={'state':job.state,'result':{k:v for k,v in job.result.items() if k!='comparison_cache'},'error':job.error} if job else {'state':'none'}
+    if job and job.state=='done' and job.result.get('engine')!='openai':
+        data={'state':'outdated','error':'Предыдущий подбор выполнен по правилам. Для ИИ-подбора подключите API и запустите анализ заново.'}
+    elif job and job.state=='done' and job.result.get('analysis_version')!=VERSION:
+        data={'state':'outdated','error':'Отбор и проверка товаров обновлены. Запустите анализ заново; прежний результат не используется для подстановки.'}
+    if job and job.state in ('queued','running') and job.updated_at<timezone.now()-timedelta(minutes=6):
+        data={'state':'error','error':'Подбор не завершился вовремя. Запустите повторно.'}
+    from .overshop import preparation_fields
+    if data.get('result',{}).get('candidates'):
+        from .product_ai import candidate_type_mismatch
+        data['result']['candidates']=[{**product,'preparation_fields':preparation_fields(product)} for product in data['result']['candidates'] if not candidate_type_mismatch(job.lot.name,product)]
+        if not data['result']['candidates']:
+            data['result']['summary']='Расходные материалы исключены: требуется само устройство. Подходящих устройств в сохранённой выборке нет.'
+    data['ai_configured']=configured()
+    response=JsonResponse(data);response['Cache-Control']='no-store, private'
     return response
 
 
@@ -235,15 +339,16 @@ def save_portal_report(owner, lot_id, report, *, allow_create=False):
             saved.portal_sync_error=''
             if report.get('description_saved'):
                 saved.portal_description_saved_at=observed
-            if state=='submitted' and workflow and workflow.stage in ('new','interesting','preparing','not_participated','applied'):
+            if state=='submitted' and workflow and workflow.stage in ('new','interesting','preparing','not_participated','applied','waiting_results'):
                 from .workflow_state import update_workflow
                 from .outcome_service import register_watch
                 from .models import UserLotPrice
                 # The report confirms submission, not the portal price. Freeze
                 # an existing local estimate without inventing a submitted price.
                 UserLotPrice.objects.select_for_update().filter(owner=owner,lot_id=lot_id,locked_at__isnull=True).update(locked_at=observed)
-                update_workflow(owner.pk,lot_id,stage='applied',outcome='',result_tracking=True,
-                    expired_from_stage='',keep_after_deadline=False)
+                expired=bool(saved.lot.announcement.deadline and saved.lot.announcement.deadline<=timezone.now())
+                update_workflow(owner.pk,lot_id,stage='waiting_results' if expired else 'applied',outcome='',result_tracking=True,
+                    expired_from_stage='applied' if expired else '',keep_after_deadline=False)
                 register_watch(owner.pk,lot_id)
                 from .workflow_notifications import queue_event
                 queue_event(owner.pk,saved.lot,company.company_bin,'submitted',report['number'])

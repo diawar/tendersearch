@@ -51,7 +51,7 @@ class AutomaticWorkflowTests(TestCase):
         self.lot=store_lot(row(1,announcement_number='100-1',system_id=1))
         self.lot.announcement.external_id=100;self.lot.announcement.save()
         self.lot.refresh_state='done';self.lot.checked_at=timezone.now();self.lot.save()
-        self.item=CollectionLot.objects.create(profile=self.profile,lot=self.lot,stage='interesting')
+        self.item=CollectionLot.objects.create(profile=self.profile,lot=self.lot,stage='preparing')
         AnnouncementLotCache.objects.create(pk=self.lot.announcement.source_id,rows=[{'id':self.lot.source_id,'system':{'id':1},'is_combined':False,'plan_items':[{'count':2,'system':{'id':1},'purchase_method':{'id':12}}]}])
     def test_move_to_interesting_stars_own_lot_and_enables_status_watch(self):
         from .models import AnnouncementWatch
@@ -59,17 +59,17 @@ class AutomaticWorkflowTests(TestCase):
         other_profile=SearchProfile.objects.create(owner=self.other,name='Чужая подборка')
         other_item=CollectionLot.objects.create(profile=other_profile,lot=self.lot,stage='new')
         with patch('tender_search.core.document_service.queue_documents') as documents, self.captureOnCommitCallbacks(execute=True):
-            response=self.client.post(f'/workspace/items/{self.item.pk}/stage/',{'stage':'interesting'})
+            response=self.client.post(f'/workspace/items/{self.item.pk}/stage/',{'stage':'preparing'})
         self.assertEqual(response.status_code,302)
         self.assertEqual(response.url,f'/workspace/?profile={self.profile.pk}&stage=all')
         self.item.refresh_from_db();other_item.refresh_from_db()
-        self.assertEqual(self.item.stage,'interesting')
+        self.assertEqual(self.item.stage,'preparing')
         self.assertEqual(other_item.stage,'new')
         self.assertTrue(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
         self.assertFalse(Favorite.objects.filter(owner=self.other,lot=self.lot).exists())
         self.assertTrue(AnnouncementWatch.objects.filter(owner=self.owner,enabled=True).exists())
         documents.assert_not_called()
-        self.client.post(f'/workspace/items/{self.item.pk}/stage/',{'stage':'interesting'})
+        self.client.post(f'/workspace/items/{self.item.pk}/stage/',{'stage':'preparing'},follow=True)
         self.assertEqual(Favorite.objects.filter(owner=self.owner,lot=self.lot).count(),1)
 
     def test_manual_decline_unprocessed_lot_stays_closed_without_star_or_watch(self):
@@ -89,24 +89,26 @@ class AutomaticWorkflowTests(TestCase):
         self.item.refresh_from_db()
         self.assertEqual(self.item.stage,'not_participated')
         page=self.client.get('/workspace/',{'profile':self.profile.pk,'stage':'not_participated'})
-        self.assertContains(page,'>В интересные</button>')
-        response=self.client.post(url,{'stage':'interesting','return_scope':'all','return_sort':'-amount'})
+        self.assertContains(page,'>В работу</button>')
+        response=self.client.post(url,{'stage':'preparing','return_scope':'all','return_sort':'-amount'})
         self.assertEqual(response.url,'/workspace/?profile=all&stage=not_participated&sort=-amount')
         self.item.refresh_from_db()
-        self.assertEqual(self.item.stage,'interesting')
+        self.assertEqual(self.item.stage,'preparing')
         self.assertEqual(self.item.expired_from_stage,'')
         self.assertTrue(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
 
     def test_decline_interesting_stays_in_category_and_keeps_applied_protected(self):
+        from .workflow_state import add_to_preparation
+        add_to_preparation(self.owner.pk,self.lot.pk)
         from .models import AnnouncementWatch
         Favorite.objects.get_or_create(owner=self.owner,lot=self.lot)[0]
         Favorite.objects.get_or_create(owner=self.other,lot=self.lot)[0]
         watch=set_watch(owner=self.owner,lot=self.lot,announcement=self.lot.announcement,enabled=True)
-        page=self.client.get('/workspace/',{'profile':self.profile.pk,'stage':'interesting'})
+        page=self.client.get('/workspace/',{'profile':self.profile.pk,'stage':'preparing'},follow=True)
         self.assertContains(page,'>Не интересно</button>')
         url=f'/workspace/items/{self.item.pk}/stage/'
         response=self.client.post(url,{'stage':'not_participated','return_scope':'all','return_sort':'amount'})
-        self.assertEqual(response.url,'/workspace/?profile=all&stage=interesting&sort=amount')
+        self.assertEqual(response.url,'/workspace/?profile=all&stage=preparing&sort=amount')
         self.item.refresh_from_db()
         self.assertEqual(self.item.stage,'not_participated')
         self.assertFalse(Favorite.objects.filter(owner=self.owner,lot=self.lot).exists())
@@ -162,10 +164,11 @@ class AutomaticWorkflowTests(TestCase):
         return LotOutcomeWatch.objects.get(pk=watch.pk)
     def test_price_in_preparation_does_not_submit_until_portal_confirms(self):
         from .workflow_state import update_workflow
+        update_workflow(self.owner.pk,self.lot.pk,stage='new')
         self.assertNotContains(self.client.get(f'/lots/{self.lot.pk}/'),'class="lot-price-form"')
         self.assertEqual(self.client.post(f'/lots/{self.lot.pk}/price/',{'unit_gross':'116'}).status_code,403)
         update_workflow(self.owner.pk,self.lot.pk,stage='preparing')
-        self.assertContains(self.client.get(f'/lots/{self.lot.pk}/preparation/'),'Сохранить подготовку')
+        self.assertContains(self.client.get(f'/lots/{self.lot.pk}/preparation/'),'id="save-preparation"')
         for value in ('', '0', '-2', 'NaN'):
             self.assertEqual(self.client.post(f'/lots/{self.lot.pk}/price/',{'unit_gross':value}).status_code,400)
             self.assertFalse(UserLotPrice.objects.exists());self.assertFalse(LotOutcomeWatch.objects.exists())
@@ -238,11 +241,11 @@ class AutomaticWorkflowTests(TestCase):
             schedule_outcomes();queued.assert_called_once()
     def test_expired_unsubmitted_move_and_reopen_without_touching_applied(self):
         self.lot.announcement.deadline=timezone.now()-timedelta(hours=1);self.lot.announcement.save()
-        move_closed_unsubmitted();self.item.refresh_from_db();self.assertEqual(self.item.stage,'interesting');self.assertTrue(self.item.result_tracking)
+        move_closed_unsubmitted();self.item.refresh_from_db();self.assertEqual(self.item.stage,'waiting_results');self.assertTrue(self.item.result_tracking)
         self.lot.announcement.deadline=timezone.now()+timedelta(hours=1);self.lot.announcement.save()
-        move_closed_unsubmitted();self.item.refresh_from_db();self.assertEqual(self.item.stage,'interesting')
+        move_closed_unsubmitted();self.item.refresh_from_db();self.assertEqual(self.item.stage,'preparing')
         self.apply();self.lot.announcement.deadline=timezone.now()-timedelta(hours=1);self.lot.announcement.save()
-        move_closed_unsubmitted();self.item.refresh_from_db();self.assertEqual(self.item.stage,'applied')
+        move_closed_unsubmitted();self.item.refresh_from_db();self.assertEqual(self.item.stage,'waiting_results')
 
     def test_watch_failure_rolls_back_confirmed_submission_and_price_lock(self):
         from .workflow_state import update_workflow
@@ -291,7 +294,7 @@ class AutomaticWorkflowTests(TestCase):
         editor=Editor();editor.connection=connection
         migration.migrate_workflow(apps,editor)
         saved.refresh_from_db();self.item.refresh_from_db()
-        self.assertIsNone(saved.locked_at);self.assertEqual(self.item.stage,'interesting')
+        self.assertIsNone(saved.locked_at);self.assertEqual(self.item.stage,'preparing')
         self.assertEqual(UserLotNote.objects.get().text,'Личная заметка')
         self.item.stage='waiting';self.item.save()
         migration.migrate_workflow(apps,editor)
@@ -302,7 +305,7 @@ class AutomaticWorkflowTests(TestCase):
     def test_star_enters_interesting_but_does_not_reset_applied_lot(self):
         self.item.stage='new';self.item.save()
         Favorite.objects.get_or_create(owner=self.owner,lot=self.lot)[0]
-        self.item.refresh_from_db();self.assertEqual(self.item.stage,'interesting')
+        self.item.refresh_from_db();self.assertEqual(self.item.stage,'preparing')
         self.submitted_report()
         Favorite.objects.filter(owner=self.owner,lot=self.lot).delete()
         Favorite.objects.get_or_create(owner=self.owner,lot=self.lot)[0]

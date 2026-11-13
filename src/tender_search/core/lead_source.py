@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from io import BytesIO
 import re
 import unicodedata
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urljoin
 
 from bs4 import BeautifulSoup
 from django.core.exceptions import ValidationError
@@ -186,7 +186,7 @@ class LeadPortal:
     def __init__(self, api):
         self.api = api
 
-    def read(self, url, max_bytes=2*1024*1024):
+    def read(self, url, max_bytes=2*1024*1024, _redirects=0):
         parts = urlsplit(url)
         allowed = (parts.hostname in {'old.goszakup.gov.kz', 'goszakup.gov.kz'} and re.fullmatch(
             r'/ru/(?:announce/index|registry/show_supplier)/\d+', parts.path.rstrip('/')))
@@ -199,6 +199,15 @@ class LeadPortal:
             self.api._pace()
             try:
                 with self.api.http.stream('GET', url, headers={'Accept': '*/*'}) as response:
+                    if response.status_code in (301,302,303,307,308):
+                        target=urljoin(url,response.headers.get('location',''))
+                        if not response.headers.get('location') or _redirects>=2:
+                            raise SourceError('Не удалось открыть публичный источник: цикл перенаправлений.')
+                        if urlsplit(target).path.rstrip('/') in ('/ru/user/login','/user/login','/login','/auth'):
+                            raise SourceError('Публичные итоги временно недоступны: портал перенаправляет на вход. Повторим автоматически.')
+                        # Validate every hop with the same public URL allowlist;
+                        # never follow a redirect into a cabinet or another host.
+                        return self.read(target,max_bytes=max_bytes,_redirects=_redirects+1)
                     if response.status_code == 404:
                         raise NotFound('Публичная карточка или протокол больше не доступны (HTTP 404)')
                     if response.status_code == 429 or response.status_code >= 500:

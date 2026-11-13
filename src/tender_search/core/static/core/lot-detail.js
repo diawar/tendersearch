@@ -62,7 +62,7 @@
 
   async function poll() {
     if (document.hidden) return;
-    if (polling || posting) { schedule(); return; }
+    if (polling || posting || root.dataset.workflowBusy === 'true') { schedule(); return; }
     polling = true;
     const requestedGeneration = generation;
     const url = new URL(root.dataset.statusUrl, location.origin);
@@ -91,6 +91,8 @@
     }
   }
 
+  root.addEventListener('workflow:before',()=>{generation++;clearTimeout(timer);});
+  root.addEventListener('workflow:after',()=>{if(pending)schedule(0);});
   root.addEventListener('submit', async event => {
     const form = event.target;
     if (!form.matches('form[data-lot-async]')) return;

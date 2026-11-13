@@ -29,15 +29,31 @@ async function checkSavedApplication(target){
   if([...document.querySelectorAll('.ant-alert-error,.ant-notification-notice-error,.ant-message-error')].some(visible))throw Error('Портал сообщил об ошибке поиска.');
   const tables=[...document.querySelectorAll('table')].filter(visible);
   const rows=tables.flatMap(t=>[...t.querySelectorAll('tbody tr')]).filter(visible).filter(r=>!r.matches('.ant-table-measure-row,[aria-hidden=true]'));
-  const matching=rows.filter(row=>{const cells=[...row.querySelectorAll(':scope > td')];return cells.some(c=>text(c).trim()===target.number)&&cells.some(c=>(text(c).match(/\d{6,}-\d+/g)||[]).includes(target.announcement_number));});
+  const matching=rows.filter(row=>{const cells=[...row.querySelectorAll(':scope > td')];return cells.some(c=>(text(c).match(/\d{6,}-\d+/g)||[]).includes(target.announcement_number));});
   if(matching.length===1){
-   const status=[...matching[0].querySelectorAll(':scope > td')].map(c=>text(c).trim()).find(v=>['Проект','Подана','Подано','Заявка подана','Завершена','Отозвана'].includes(v));
-   return {...base,check_state:'found',message:'Заявка №'+target.number+' найдена.'+(status?' Статус на портале: '+status: '')};
+   const cells=[...matching[0].querySelectorAll(':scope > td')],number=text(cells[0]).trim();
+   const status=cells.map(c=>text(c).trim()).find(v=>['Проект','Подана','Подано','Заявка подана','Завершена','Отозвана'].includes(v));
+   if(!/^\d{1,30}$/.test(number)||!status)throw Error('Номер или статус заявки не подтверждены.');
+   return {...base,check_state:'found',found_number:number,application_state:status==='Проект'?'draft':status==='Завершена'?'completed':status==='Отозвана'?'withdrawn':'submitted',message:'Заявка №'+number+' найдена. Статус на портале: '+status};
   }
   const hasHeaders=tables.some(t=>{const value=text(t.querySelector('thead')).replace(/\s+/g,' ');return value.includes('Статус заявки')&&value.includes('№ заявки');});
   const empty=[...document.querySelectorAll('.ant-empty-description,.ant-empty')].filter(visible).some(el=>/^Нет заявок$/.test(text(el).trim()));
   if(hasHeaders&&empty&&!rows.some(r=>[...r.querySelectorAll(':scope > td')].length>1&&text(r).trim()))return {...base,check_state:'absent',message:'По точному номеру объявления портал вернул «Нет заявок». Автоматическое создание не выполнялось.'};
   throw Error('Список не позволяет однозначно подтвердить наличие или отсутствие сохранённой заявки.');
- }catch(error){return {...base,message:error.message};}
+ }catch(error){return {...base,retryable:/не загрузились|ошибке поиска/.test(error.message),message:error.message};}
 }
-if(typeof module!=='undefined')module.exports={checkSavedApplication};
+function draftPreflightDecision(job,result,now=Date.now()){
+ const p=job.packet,observed=Date.parse(result?.observed_at);
+ if(!result||!Number.isFinite(observed)||Math.abs(now-observed)>120000||['company_bin','announcement_number','lot_number'].some(k=>result[k]!==p[k]))return {action:'block',message:'Проверка не подтвердила текущий БИН и объявление. Создание остановлено.'};
+ if(result.check_state==='found'){
+  if(!/^\d{1,30}$/.test(result.found_number||'')||result.application_state!=='draft')return {action:'block',message:'На портале найдена заявка, которая не является редактируемым черновиком. Повторное создание запрещено.'};
+  return {action:'resume',number:result.found_number};
+ }
+ if(result.check_state==='absent'){
+  // A previous create request may still be in flight. Require a second empty search later.
+  if(job.createUncertain&&(!job.absenceConfirmedAt||now-job.absenceConfirmedAt<60000))return {action:'wait',confirmAbsence:true,message:'Первый поиск не нашёл заявку после неподтверждённого создания. Повторим проверку через минуту; новый черновик пока не создаём.'};
+  return {action:'create'};
+ }
+ return {action:result.retryable===true?'wait':'block',message:'Не удалось однозначно проверить существующие заявки. Новый черновик не создаётся. '+(result.message||'')};
+}
+if(typeof module!=='undefined')module.exports={checkSavedApplication,draftPreflightDecision};

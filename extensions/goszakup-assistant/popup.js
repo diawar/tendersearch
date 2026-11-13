@@ -1,5 +1,6 @@
 let statusReport;
 let displayedDraftKey;
+let draftRevision=0;
 const show=(value,tone='info')=>{
  const card=document.querySelector('#result-card');
  card.hidden=false;
@@ -20,6 +21,7 @@ const show=(value,tone='info')=>{
  document.querySelector('#result-mark').textContent=({success:'✓',warning:'!',error:'!'}[tone]||'i');
 };
 document.querySelector('#status').onclick=async()=>{
+ const revision=++draftRevision;
  statusReport=null;document.querySelector('#send').disabled=true;
  document.querySelector('#status').disabled=true;
  document.querySelector('#status-label').textContent='Проверяем…';
@@ -27,20 +29,26 @@ document.querySelector('#status').onclick=async()=>{
  try{
   target=statusTarget(Object.fromEntries(['company_bin','announcement_number','lot_number'].map(key=>[key,document.querySelector('#'+key).value])));
   const [tab]=await chrome.tabs.query({active:true,currentWindow:true});
+  if(revision!==draftRevision)return;
   const url=new URL(tab.url);if(url.origin!=='https://zakup.gov.kz'||!url.pathname.startsWith('/cabinet/'))throw Error('Откройте кабинет zakup.gov.kz');
   validTarget=true;
   const results=await chrome.scripting.executeScript({target:{tabId:tab.id},func:readPortalStatus,args:[target]});
+  if(revision!==draftRevision)return;
   const report=results[0].result;if(report.error){semanticFailure=true;throw Error(report.error);}
   statusReport=report;document.querySelector('#send').disabled=false;show(report);
  }catch(error){
+  if(revision!==draftRevision)return;
   if(validTarget&&!semanticFailure&&target){statusReport={schema:'goszakup-status-v1',...target,observed_at:new Date().toISOString(),state:'unknown'};document.querySelector('#send').disabled=false;}
   show(error.message,'error');
  }finally{
+  if(revision===draftRevision){
   document.querySelector('#status').disabled=false;
   document.querySelector('#status-label').textContent='Проверить статус';
+  }
  }
 };
 for(const key of ['company_bin','announcement_number','lot_number'])document.querySelector('#'+key).addEventListener('input',()=>{
+ draftRevision++;
  statusReport=null;document.querySelector('#send').disabled=true;show('Условия изменены. Нажмите «Проверить статус».');
 });
 document.querySelector('#send').onclick=async()=>{
@@ -54,6 +62,7 @@ document.querySelector('#send').onclick=async()=>{
 
 let absenceTarget;
 function renderDraft(job){
+ if(!job){statusReport=null;displayedDraftKey=undefined;document.querySelector('#send').disabled=true;document.querySelector('#result-card').hidden=true;for(const name of ['result-title','result-summary'])document.querySelector('#'+name).textContent='';for(const name of ['company_bin','announcement_number','lot_number'])document.querySelector('#'+name).value='';}
  absenceTarget=job?.packet;
  const absent=document.querySelector('#draft-confirm-absent');
  absent.hidden=!(job?.createUncertain&&!job.number);
@@ -67,7 +76,7 @@ function renderDraft(job){
  document.querySelector('#status').disabled=active;
  if(job?.packet){
   const packet=job.packet;
-  const key=[packet.company_bin,packet.announcement_number,packet.lot_number,job.appOrigin||''].join(':');
+  const key=[job.accountScope,packet.company_bin,packet.announcement_number,packet.lot_number,job.appOrigin||''].join(':');
   if(displayedDraftKey!==key){
    displayedDraftKey=key;
    for(const name of ['company_bin','announcement_number','lot_number'])document.querySelector('#'+name).value=packet[name]||'';
@@ -92,13 +101,15 @@ function renderDraft(job){
  }
 }
 async function draftCommand(type){
- try{const result=await chrome.runtime.sendMessage({type});if(result.error)throw Error(result.error);renderDraft(result.job);}
- catch(error){show(error.message,'error');}
+ const revision=++draftRevision;
+ try{const result=await chrome.runtime.sendMessage({type});if(revision!==draftRevision)return;if(result.error)throw Error(result.error);renderDraft(result.job);}
+ catch(error){if(revision!==draftRevision)return;renderDraft(null);show(error.message,'error');}
 }
 document.querySelector('#draft-start').onclick=()=>draftCommand('draft:start');
 document.querySelector('#draft-confirm-absent').onclick=async()=>{
- try{const result=await chrome.runtime.sendMessage({type:'draft:confirm-absent',company_bin:absenceTarget?.company_bin,announcement_number:absenceTarget?.announcement_number,lot_number:absenceTarget?.lot_number});if(result.error)throw Error(result.error);renderDraft(result.job);}
- catch(error){show(error.message,'error');}
+ const revision=++draftRevision;
+ try{const result=await chrome.runtime.sendMessage({type:'draft:confirm-absent',company_bin:absenceTarget?.company_bin,announcement_number:absenceTarget?.announcement_number,lot_number:absenceTarget?.lot_number});if(revision!==draftRevision)return;if(result.error)throw Error(result.error);renderDraft(result.job);}
+ catch(error){if(revision===draftRevision){renderDraft(null);show(error.message,'error');}}
 };
 
 document.querySelector('#draft-stop').onclick=()=>draftCommand('draft:stop');
@@ -108,5 +119,5 @@ document.querySelector('#draft-clear').onclick=async()=>{
 };
 if(chrome.runtime?.sendMessage){
  void draftCommand('draft:get');
- chrome.storage.onChanged.addListener((changes,area)=>{if(area==='session'&&changes.draftJob)renderDraft(changes.draftJob.newValue);});
+ chrome.storage.onChanged.addListener((changes,area)=>{if(area==='session'&&(changes.draftJob||changes.appAccounts)){renderDraft(null);void draftCommand('draft:get');}});
 }

@@ -1,0 +1,42 @@
+<section class="panel deal-estimate" id="deal-estimate" data-url="{% url 'deal_estimate' lot_id=lot.pk %}">
+<h2>Калькулятор сделки</h2>
+{% if saved_deal %}{{ saved_deal|json_script:'saved-deal-estimate' }}{% endif %}
+<form id="deal-estimate-form" autocomplete="off">
+<input type="hidden" id="deal-product-name" name="product_name"><input type="hidden" id="deal-sale-unit" name="unit_gross">
+<div class="deal-product-summary"><div class="deal-summary-name"><span>Товар из подготовки заявки</span><strong data-deal-product>Не выбран</strong></div><div><span>Количество</span><strong>{{ price_policy.quantity|floatformat:'-6g'|default:'—' }} {{ price_policy.measure }}</strong></div><div><span>Цена продажи за единицу</span><strong data-deal-sale>Не указана</strong><small>С учётом НДС вашей организации</small></div></div>
+<div class="deal-block"><h3>Закупка</h3><p class="muted">Сравним склады p1 по достаточному остатку и минимальной стоимости закупки. Или укажите закупочную цену вручную.</p><div class="form-grid">
+<div class="field"><label for="deal-procurement-mode">Источник закупки</label><select id="deal-procurement-mode" name="procurement_mode"><option value="p1">Сравнить склады p1</option><option value="manual">Ввести закупку вручную</option></select></div>
+<div class="field" data-p1-fields><label for="deal-sku">SKU товара Over</label><input id="deal-sku" name="sku" maxlength="100" placeholder="Точный SKU выбранного товара"><small>Подставляется при выборе товара ИИ. Проверьте название в результате сравнения.</small></div>
+<div class="field" data-manual-purchase hidden><label for="deal-purchase">Закупочная цена за единицу, ₸</label><input id="deal-purchase" name="purchase_unit_gross" inputmode="decimal" placeholder="Себестоимость из счёта поставщика"></div>
+
+</div></div>
+<div class="deal-block deal-shipping"><h3>Доставка <span class="deal-service-label">От двери до двери</span></h3>
+<p class="muted" id="deal-location">Читаем место поставки и справочник городов…</p>
+<div class="form-grid">
+<div class="field"><label for="deal-delivery-mode">Стоимость доставки</label><select id="deal-delivery-mode" name="delivery_mode"><option value="jet">Расчёт Jet Logistic</option><option value="manual">Подтверждённая сумма вручную</option></select></div>
+<div class="field" data-manual-delivery hidden><label for="deal-delivery-gross">Доставка всего, ₸</label><input id="deal-delivery-gross" name="delivery_gross" inputmode="decimal" placeholder="Включая налоги перевозчика"></div>
+</div>
+<div class="form-grid" data-jet-fields>
+<div class="field" data-manual-origin><label for="deal-origin">Откуда · склад отправления</label><select id="deal-origin" name="origin"><option value="">Выберите город склада</option></select></div>
+<div class="field" data-p1-fields><label for="deal-local-delivery">Доставка внутри города, всего ₸</label><input id="deal-local-delivery" name="local_delivery_gross" inputmode="decimal" placeholder="Если склад и место поставки в одном городе"><small>Неизвестная стоимость не считается нулевой. Укажите 0 только при подтверждённой бесплатной доставке.</small></div>
+<div class="field"><label for="deal-destination">Куда · место поставки лота</label><select id="deal-destination" name="destination"><option value="">Выберите место поставки</option></select><small>Если адрес неоднозначен, сверьте его с техспецификацией.</small></div>
+<div class="field"><label for="deal-weight">Вес всей отправки с упаковкой, кг</label><input id="deal-weight" name="weight_kg" inputmode="decimal" placeholder="Например, 10"></div>
+<div class="field"><label for="deal-volume">Объём всей отправки с упаковкой, м³</label><input id="deal-volume" name="volume_m3" inputmode="decimal" placeholder="Например, 0,05"></div>
+<div class="field"><label for="deal-packages">Число грузовых мест</label><input id="deal-packages" name="packages" type="number" min="1" step="1" placeholder="Например, 2"></div>
+<div class="field"><label for="deal-cargo">Характер груза</label><select id="deal-cargo" name="cargo_type"><option value="">Выберите характер груза</option></select></div>
+<input type="hidden" id="deal-delivery-option" name="delivery_option" value="door_to_door">
+</div>
+<p class="muted">Тариф Jet Logistic предварительный: включение НДС и адресные доплаты нужно подтвердить у перевозчика. До подтверждения прибыль также предварительная. Заказ на перевозку не создаётся.</p>
+</div>
+{% include 'core/_obligation_costs.html' %}
+<details class="deal-advanced"><summary>Налоги и обеспечения · дополнительные настройки</summary><div class="form-grid"><div class="field"><input type="hidden" name="purchase_vat_credit" value="yes"><label for="deal-purchase-vat">НДС закупки к зачёту · ставка в документе поставщика, %</label><input id="deal-purchase-vat" name="purchase_vat_rate" inputmode="decimal" value="16"><small>Показываем один расчёт с зачётом закупочного НДС. Для организации без НДС зачёт не применяется.</small></div>
+<div class="field"><label for="deal-other">Другие расходы, ₸</label><input id="deal-other" name="other_costs" inputmode="decimal" value="0"><small>Расходы, уже добавленные строками выше, здесь повторно не указывайте.</small></div>
+<div class="field"><label for="deal-security">Деньги, замороженные под обеспечения, ₸</label><input id="deal-security" name="refundable_security" inputmode="decimal" value="0"><small>Возвратные деньги — не расход. Для банковской гарантии здесь только реальный залог; комиссию включите в другие расходы.</small></div>
+<div class="field"><label for="deal-days">Срок заморозки обеспечений, дней</label><input id="deal-days" name="freeze_days" inputmode="decimal" value="0"></div>
+<div class="field"><label for="deal-interest">Стоимость денег, % годовых</label><input id="deal-interest" name="annual_money_rate" inputmode="decimal" value="0"></div>
+<div class="field"><label for="deal-tax-mode">Налог на доход</label><select id="deal-tax-mode" name="tax_mode"><option value="unknown">Пока не указан · покажем прибыль до налога</option><option value="profit">От положительной прибыли</option><option value="turnover">От дохода без НДС</option></select></div>
+<div class="field"><label for="deal-tax-rate">Применимая ставка налога, %</label><input id="deal-tax-rate" name="income_tax_rate" inputmode="decimal" placeholder="Укажите по вашему налоговому режиму"><small>Статус плательщика НДС сам по себе не определяет налог на прибыль.</small></div>
+</div></details>
+<div class="actions deal-calculate"><button class="button preparation-cta" type="submit">Рассчитать и сохранить</button><span>Товар и цену меняйте в подготовке заявки выше.</span></div>
+</form><p id="deal-estimate-status" role="status" aria-live="polite"></p><div id="deal-estimate-result"></div>
+</section>

@@ -173,6 +173,8 @@ def scan_profile(profile_id, lease):
             baseline = current.index_baseline_at is None if settings.USE_LOCAL_INDEX else current.baseline_at is None
             from .models import UserLotWorkflow
             archived_lots = set(UserLotWorkflow.objects.filter(owner=current.owner,stage__in=('archived','not_participated')).values_list('lot_id',flat=True))
+            from .models import PurgedUserLot
+            archived_lots.update(PurgedUserLot.objects.filter(owner_id=current.owner_id).values_list('lot_id',flat=True))
             for hit in job.hits.select_related('lot__announcement','lot__customer').iterator():
                 lot = hit.lot
                 if lot.pk in archived_lots:
@@ -222,7 +224,7 @@ def message_for(delivery):
     buttons=[[{'text':('Открыть на госзакупе ↗' if lot.announcement.source == 'zakup' else f'Открыть на {lot.portal_label} ↗'),'url':url}]]
     from .telegram_actions import callback_data
     action=callback_data(delivery)
-    if action:buttons.insert(0,[{'text':'⭐ В интересные','callback_data':action}])
+    if action:buttons.insert(0,[{'text':'⭐ В работу','callback_data':action}])
     return {'text':body,'parse_mode':'HTML','link_preview_options':{'is_disabled':True},'reply_markup':{'inline_keyboard':buttons}}
 
 def deliver_pending():

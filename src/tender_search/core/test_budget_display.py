@@ -34,11 +34,12 @@ class BudgetDisplayTests(TestCase):
         self.assertTrue(lot_budget_display(self.lot)['multiple'])
 
     def test_search_favorites_workspace_and_open_lot_show_same_numbers(self):
-        Favorite.objects.get_or_create(owner=self.owner,lot=self.lot)
+        from .workflow_state import add_to_preparation
+        add_to_preparation(self.owner.pk,self.lot.pk)
         job=WebSearch.objects.create(owner=self.owner,status='done',specification={'terms':['мыш']})
         SearchHit.objects.create(search=job,lot=self.lot,terms=['мыш'])
-        for url in [f'/search/{job.pk}/','/favorites/','/workspace/?profile=all&stage=interesting',f'/lots/{self.lot.pk}/']:
-            response=self.client.get(url)
+        for url in [f'/search/{job.pk}/','/favorites/','/workspace/?profile=all&stage=preparing',f'/lots/{self.lot.pk}/']:
+            response=self.client.get(url,follow=True)
             self.assertContains(response,'Количество × бюджет за единицу')
             self.assertContains(response,'30 шт.')
             self.assertContains(response,'3 737,00')

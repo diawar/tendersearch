@@ -60,8 +60,9 @@ def download_documents(lot_id, api):
                 continue
             try:
                 Document.objects.filter(pk=doc.pk).update(status='downloading',error='')
-                result = api.download(file,Path(settings.MEDIA_ROOT))
-                DocumentVersion.objects.update_or_create(document=doc,sha256=result['sha256'],defaults={'storage_path':result['path']})
+                from .storage_lifecycle import publish_download
+                with publish_download(api,file) as result:
+                    DocumentVersion.objects.update_or_create(document=doc,sha256=result['sha256'],defaults={'storage_path':result['path']})
                 Document.objects.filter(pk=doc.pk).update(status='ready',error='')
             except Exception as exc:
                 errors += 1
@@ -82,8 +83,8 @@ def documents_needed(lot_ids, deadline, kind, now=None):
     for workflow in UserLotWorkflow.objects.filter(lot_id__in=lot_ids):
         if workflow.stage not in ('lost', 'not_participated', 'archived'):
             return True
-        days = 90 if kind in ('contract', 'act') or workflow.stage == 'archived' else 30
-        changed = workflow.completed_at or workflow.archived_at or workflow.updated_at
+        days = 30 if workflow.stage == 'archived' else (90 if kind in ('contract','act') else 30)
+        changed = (workflow.archived_at or workflow.updated_at) if workflow.stage=='archived' else (workflow.completed_at or workflow.updated_at)
         if changed > now - timedelta(days=days):
             return True
     return False
@@ -92,7 +93,8 @@ def documents_needed(lot_ids, deadline, kind, now=None):
 def cleanup_documents(announcement_id):
     paths = []
     with transaction.atomic():
-        announcement = Announcement.objects.select_for_update().filter(pk=announcement_id).first()
+        from .storage_lifecycle import lock_retention
+        announcement = lock_retention(announcement_id)
         if not announcement:
             return
         for doc in Document.objects.filter(announcement_id=announcement_id):
@@ -100,33 +102,25 @@ def cleanup_documents(announcement_id):
             if documents_needed(lot_ids, announcement.deadline, doc.kind):
                 continue
             paths.extend(doc.versions.exclude(storage_path='').values_list('storage_path', flat=True))
-            doc.versions.update(storage_path='', text='', pages=[])
+            doc.versions.update(storage_path='', text='', search_text='', pages=[])
             Document.objects.filter(pk=doc.pk).update(status='expired', error='')
         from .models import LotSpecification
         for lot in announcement.lots.all():
             if not documents_needed([lot.pk], announcement.deadline, 'technical'):
                 LotSpecification.objects.filter(lot=lot).update(documents=[], state='not_found', error='Срок хранения документов истёк.')
-        def remove_files():
-            for value in set(paths):
-                if not DocumentVersion.objects.filter(storage_path=value).exists():
-                    try:
-                        stored_path(value).unlink(missing_ok=True)
-                    except (OSError, ValueError):
-                        pass
-        transaction.on_commit(remove_files)
+        from .archive_retention import enqueue_file,drain_file_deletions
+        for value in set(paths):enqueue_file('document',value)
+        transaction.on_commit(drain_file_deletions)
+
 
 
 def cleanup_expired_documents():
     from django.core.cache import cache
-    from .models import LotShipment
     if not cache.add('document-retention-hour', True, timeout=3600):
         return
     ids = Document.objects.exclude(status='expired').values_list('announcement_id', flat=True).distinct()
     for announcement_id in ids.iterator():
         cleanup_documents(announcement_id)
-    for shipment in LotShipment.objects.exclude(act='').select_related('lot__announcement').iterator():
-        if not documents_needed([shipment.lot_id], shipment.lot.announcement.deadline, 'act'):
-            name, storage = shipment.act.name, shipment.act.storage
-            LotShipment.objects.filter(pk=shipment.pk, act=name).update(act='')
-            if not LotShipment.objects.filter(act=name).exists():
-                storage.delete(name)
+    from .archive_retention import collect_orphan_acts,drain_file_deletions
+    collect_orphan_acts()
+    drain_file_deletions()

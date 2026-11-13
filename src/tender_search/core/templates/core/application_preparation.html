@@ -2,9 +2,9 @@
 {% block title %}Подготовка заявки — Госзакупки{% endblock %}
 {% block content %}
 <div class="preparation-page">
-<div class="page-heading"><div><a href="{% url 'workspace' %}?profile=all&amp;stage=preparing">← К подготовке заявок</a><h1>Подготовка заявки</h1></div><a href="{% url 'notification_settings' %}#chrome-extension">Установка расширения</a></div>
+<div class="page-heading"><div><a href="{% url 'workspace' %}?profile=all&amp;stage=preparing">← К лотам в работе</a><h1>Подготовка заявки</h1></div><a href="{% url 'notification_settings' %}#chrome-extension">Установка расширения</a></div>
 <section class="panel preparation-summary">
-<h2>{{ lot.name }}</h2><p>Лот {{ lot.number }} {% include 'core/_copy_lot_number.html' %} · Объявление {{ lot.announcement.number }}</p>
+<h2>{{ lot.name }}</h2><p>Лот {{ lot.number }} {% include 'core/_copy_lot_number.html' %} · Объявление {{ lot.announcement.number }} {% include 'core/_copy_announcement_number.html' %}</p>
 {% participation_warning lot %}
 <div class="preparation-status" role="status">
 <strong>{% if preparation.portal_state == 'submitted' %}Заявка подана{% elif preparation.portal_state == 'completed' %}Заявка завершена на портале{% elif preparation.portal_description_saved_at %}Черновик заполнен{% elif preparation.portal_state == 'draft' %}Черновик создан · заполнение не завершено{% elif preparation %}Данные сохранены · черновик ещё не подтверждён{% else %}Заполните данные для черновика{% endif %}</strong>
@@ -12,25 +12,57 @@
 </div>
 {% if preparation.portal_sync_error %}<p class="error">{{ preparation.portal_sync_error }}</p>{% endif %}
 {% if bin_changed %}<p class="error">БИН организации изменён. Проверьте реквизиты и сохраните подготовку заново.</p>{% endif %}
-{% if not editable %}<p class="muted">{% if preparation_busy %}Идёт заполнение черновика. Чтобы изменить данные, сначала остановите заполнение в расширении.{% else %}Просмотр сохранённых данных. Редактирование доступно на этапе «Подготовка заявки».{% endif %}</p>{% endif %}
+{% if not editable %}<p class="muted">{% if preparation_busy %}Идёт заполнение черновика. Чтобы изменить данные, сначала остановите заполнение в расширении.{% else %}Просмотр сохранённых данных. Редактирование доступно на этапе «В работе».{% endif %}</p>{% endif %}
 </section>
-<section class="panel"><h2>Товар, цена и реквизиты</h2>
-<p class="muted">БИН {{ company_bin|default:'не указан' }} · <a href="{% url 'notification_settings' %}#company-settings">Реквизиты организации</a></p>
-<form method="post" autocomplete="off" id="preparation-form"{% if price_policy %} class="lot-price-form" data-quantity="{{ price_policy.quantity_text }}" data-budget-unit="{{ price_budget.unit|unlocalize }}" data-budget-total="{{ price_budget.total|unlocalize }}"{% endif %}>{% csrf_token %}{{ form.non_field_errors }}
-{% if price_policy %}{% include 'core/_preparation_price_fields.html' %}{% endif %}
-<h3>Товар и реквизиты</h3><div class="form-grid">{% for field in form %}<div class="field">{{ field.label_tag }}{{ field }}{{ field.errors }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}</div>{% endfor %}</div>
-{% if editable %}<div class="actions"><button class="button preparation-cta" type="submit">Сохранить подготовку</button>{% if preparation %}<small class="muted">Сохранено {{ preparation.updated_at|date:'d.m.Y H:i' }}</small>{% endif %}</div>{% endif %}
-</form>
-</section>
-{% if editable %}<section class="panel preparation-launch"><h2>Черновик на Госзакупе</h2>
-{% if preparation and not bin_changed %}{% if export_supported %}
-<button type="button" class="button preparation-cta" id="prepare-with-extension" data-export-url="{% url 'preparation_export' lot_id=lot.pk %}">Создать черновик через расширение</button>
-<p class="muted">Откроется объявление Госзакупа. В расширении нажмите «Создать / продолжить черновик».</p>
-<p id="preparation-bridge-result" role="status" aria-live="polite"></p>
-{% else %}<p>Для этого лота подготовка через расширение недоступна: площадка не поддерживается или не подтверждена.</p>{% endif %}
-{% else %}<p>Сначала сохраните данные товара и реквизиты.</p>{% endif %}
-<p class="muted">На портале проверьте черновик, укажите цену и обеспечение. Подписание и отправка выполняются вами. Этап «Подали заявку» включится после подтверждения с Госзакупа.</p>
+{% include 'core/_preparation_steps.html' %}
+<section id="prep-step-1" class="panel preparation-step preparation-requirements">
+{% include 'core/_preparation_specification.html' %}
+{% if decline_item_id %}<div class="preparation-decline"><form method="post" action="{% url 'collection_move' item_id=decline_item_id %}">{% csrf_token %}<input type="hidden" name="stage" value="not_participated"><input type="hidden" name="return_to" value="{% url 'draft_queue' %}?profile=all"><button type="submit" class="outline"{% if preparation_busy %} disabled title="Сначала остановите заполнение в расширении"{% endif %}>Не интересно</button></form></div>{% endif %}
+{% if editable %}<section class="product-selection" id="product-selection" data-ai-configured="{{ product_ai_configured|yesno:'true,false' }}" data-analysis-url="{% url 'preparation_product_analysis' lot_id=lot.pk %}">
+<h2>Подобрать товар из каталога</h2><p class="muted">Необязательно: можно заполнить выбранный товар вручную ниже.</p><p>ИИ выделяет требования и сравнивает реальные карточки каталога. Приложение проверяет количество и бюджет: сначала онлайн-цену, затем клубную, с учётом НДС вашей организации.</p>
+{% if not product_ai_configured %}<p class="notice">ИИ не подключён. Администратору нужно настроить OPENAI_API_KEY и OPENAI_MODEL на сервере. Ключ в браузере не вводится.</p>{% endif %}
+<button class="button preparation-cta" type="button" id="analyze-product"{% if not product_ai_configured %} disabled{% endif %}>Проанализировать спецификацию и подобрать товар</button>
+<p id="product-selection-status" role="status" aria-live="polite"></p><div id="product-selection-results"></div>
 </section>{% endif %}
+</section>
+<form method="post" autocomplete="off" id="preparation-form" data-saved="{{ preparation|yesno:'true,false' }}"{% if price_policy %} class="lot-price-form" data-quantity="{{ price_policy.quantity_text }}" data-budget-unit="{{ price_budget.unit|unlocalize }}" data-budget-total="{{ price_budget.total|unlocalize }}"{% endif %}>{% csrf_token %}{{ form.non_field_errors }}
+<section class="panel preparation-product-fields preparation-step" id="prep-step-2">
+<h2>2. Товар и наша цена</h2><p class="step-help">Проверьте соответствие требованиям. Укажите конкретный товар, изготовителя, страну производства и цену за единицу.</p>
+<div class="form-grid">{% for field in form %}{% if field.name == 'product_name' or field.name == 'manufacturer' or field.name == 'country' %}<div class="field">{{ field.label_tag }}{{ field }}{{ field.errors }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}</div>{% endif %}{% endfor %}</div>
+{% if price_policy %}{% include 'core/_preparation_price_fields.html' %}{% else %}<p class="notice">Количество и бюджет за единицу пока не подтверждены. Проверьте данные лота перед подачей цены.</p>{% endif %}
+<p class="step-missing" data-product-missing>{% if preparation_product_missing %}Осталось: {{ preparation_product_missing|join:'; ' }}.{% else %}Товар и цена заполнены. Сверьте характеристики с требованиями заказчика.{% endif %}</p>
+</section>
+<section class="panel preparation-step" id="prep-step-3">
+<h2>3. Реквизиты для заявки</h2><p class="step-help">БИН {{ company_bin|default:'не указан' }} · <a href="{% url 'notification_settings' %}#company-settings">Изменить реквизиты организации</a></p>
+<details {% if preparation_company_missing %}open{% endif %}><summary>Проверить реквизиты и обеспечение</summary><div class="form-grid">{% for field in form %}{% if field.name != 'product_name' and field.name != 'manufacturer' and field.name != 'country' %}<div class="field">{{ field.label_tag }}{{ field }}{{ field.errors }}{% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}</div>{% endif %}{% endfor %}</div></details>
+<p class="step-missing" data-company-missing>{% if preparation_company_missing %}Осталось: {{ preparation_company_missing|join:'; ' }}.{% else %}Реквизиты заполнены. Они должны совпадать с данными Госзакупа.{% endif %}</p>
+{% if editable %}<div class="preparation-save-bar"><button class="button preparation-cta" type="submit" id="save-preparation">Сохранить товар, цену и реквизиты</button><span data-preparation-save-state>{% if preparation %}Сохранено {{ preparation.updated_at|date:'d.m.Y H:i' }}{% else %}Данные ещё не сохранены{% endif %}</span></div>{% endif %}
+</section></form>
+<div id="prep-step-4" class="preparation-step">
+{% if price_policy or saved_deal %}{% include 'core/_deal_estimate.html' %}{% endif %}
+</div>
+<section class="panel preparation-launch preparation-step" id="prep-step-5"><h2>5. Черновик на zakup.gov.kz</h2>
+<p class="step-help">В черновик переносятся реквизиты и описание товара. Цена, обеспечение, подписание и отправка на портале остаются ручными.</p>
+{% if preparation.portal_description_saved_at %}<p class="step-success">Описание товара сохранено в черновике{% if preparation.portal_number %} № {{ preparation.portal_number }}{% endif %}.</p>{% endif %}
+{% if editable %}
+<button type="button" class="button preparation-cta" id="prepare-with-extension" data-export-url="{% url 'preparation_export' lot_id=lot.pk %}" data-launch-ready="{{ preparation_launch_ready|yesno:'true,false' }}"{% if not preparation_launch_ready %} disabled{% endif %}>Сохранить в черновик на zakup.gov.kz</button>
+<p class="step-missing" data-launch-missing>{{ preparation_launch_reason }}</p>
+{% if preparation_launch_ready %}<p class="muted">Откроется объявление. В расширении нажмите «Создать / продолжить черновик». Результат проверьте на этапе «В работе» рабочего пространства.</p>{% endif %}
+<p id="preparation-bridge-result" role="status" aria-live="polite"></p>
+{% else %}<p>{{ preparation_launch_reason }}</p>{% endif %}
+</section>
+<section class="panel preparation-step preparation-next" id="prep-step-6"><h2>6. Подача и ожидание итогов</h2>
+{% if preparation_workflow_stage == 'waiting_results' %}<strong>Текущий этап: Ожидаем итоги</strong><p>Срок подачи завершён. Проверка участия и победителя по вашему БИН продолжается. При неподтверждённых итогах лот остаётся здесь.</p>
+{% elif not editable and not preparation_busy %}<strong>Текущий этап: {{ preparation_workflow_label }}</strong><p>Здесь показаны сохранённые данные подготовки. Дальнейшее движение лота отображается в рабочем пространстве и зависит от подтверждённых сведений Госзакупа.</p>
+{% elif preparation.portal_state == 'submitted' %}<strong>Подача подтверждена Госзакупом</strong><p>До завершения приёма — «Подали заявку». После окончания срока — «Ожидаем итоги».</p>
+{% else %}<p>Готовый черновик ещё не является поданной заявкой. На Госзакупе проверьте данные, оформите обеспечение, введите цену, подпишите и отправьте заявку.</p><p>После подтверждения подачи лот перейдёт в «Подали заявку». Если срок истечёт раньше подтверждения, он перейдёт в «Ожидаем итоги»: участие проверяется по БИН.</p>{% endif %}
+<div class="preparation-outcomes"><span>Победа → Заключение договора</span><span>Участвовали, не победили → Проиграли</span><span>Отсутствие участия подтверждено → Не участвовали</span></div>
+</section>
 </div>
 <script defer src="{% static 'core/preparation_bridge.js' %}"></script>
+<script defer src="{% static 'core/product-selection.js' %}"></script>
+<script defer src="{% static 'core/deal-estimate.js' %}"></script>
+<script defer src="{% static 'core/obligation-costs.js' %}"></script>
+<script defer src="{% static 'core/preparation-steps.js' %}"></script>
+<script defer src="{% static 'core/preparation-specification.js' %}"></script>
 {% endblock %}

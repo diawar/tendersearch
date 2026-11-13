@@ -1,4 +1,4 @@
-{% if shipment_form or shared_acts %}
+{% if shipment_form or personal_acts %}
 <section class="panel" id="shipment">
   <h2>Доставка и акт</h2>
   {% if shipment.shipped_at %}<p>Отправлено: {{ shipment.shipped_at|date:'d.m.Y H:i' }} · {{ shipment.get_mode_display }}{% if shipment.courier %} · {{ shipment.courier }} · {{ shipment.tracking_number }}{% endif %}</p>{% endif %}
@@ -13,6 +13,6 @@
   </form>
   {% endif %}
   {% endif %}
-  {% for act in shared_acts %}<p><a href="{% url 'shipment_act_download' lot_id=lot.pk %}?act={{ act.pk }}">Скачать акт · {{ act.act_uploaded_at|date:'d.m.Y H:i' }}</a></p>{% endfor %}
+  {% for act in personal_acts %}<p><a href="{% url 'shipment_act_download' lot_id=lot.pk %}?act={{ act.pk }}">Скачать акт · {{ act.act_uploaded_at|date:'d.m.Y H:i' }}</a></p>{% endfor %}
 </section>
 {% endif %}

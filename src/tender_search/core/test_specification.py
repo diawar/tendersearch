@@ -74,7 +74,8 @@ class SpecificationTests(TestCase):
         endpoint = f'/lots/{self.lot.pk}/specification/'
         with patch('tender_search.core.tasks.extract_lot_specification.delay') as queued:
             self.assertEqual(self.client.get(endpoint).status_code, 405)
-            for _ in range(2): self.assertEqual(self.client.post(endpoint).status_code, 302)
+            with self.captureOnCommitCallbacks(execute=True):
+                for _ in range(2): self.assertEqual(self.client.post(endpoint).status_code, 302)
             queued.assert_called_once()
             self.assertEqual(LotSpecification.objects.filter(owner=self.owner).count(), 1)
             self.client.logout()

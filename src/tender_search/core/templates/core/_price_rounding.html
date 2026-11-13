@@ -1,0 +1,7 @@
+<div class="notice price-rounding" data-price-rounding {% if not price_result.rounding_difference %}hidden{% endif %}>
+<strong>Небольшая разница из-за округления</strong>
+<div><span>Введённая цена × количество</span><strong><span data-price-output="desired_total">{{ price_result.desired_total|floatformat:'2g'|default:'—' }}</span> ₸</strong></div>
+<div><span>Сумма после пересчёта НДС</span><strong><span data-price-output="total_gross">{{ price_result.total_gross|floatformat:'2g'|default:'—' }}</span> ₸</strong></div>
+<div><span>Разница: пересчёт минус исходная сумма</span><strong><span data-price-output="rounding_difference">{{ price_result.rounding_difference|floatformat:'2g'|default:'—' }}</span> ₸</strong></div>
+<p>Цена за единицу без НДС округляется до тиынов. Затем рассчитываются общая сумма и НДС — поэтому итог может немного отличаться. Сверьте его с расчётом на портале.</p>
+</div>

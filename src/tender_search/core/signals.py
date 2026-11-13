@@ -5,6 +5,8 @@ from django.db import transaction
 
 @receiver(post_delete,sender=Favorite)
 def stop_watch_when_removed(sender,instance,**kwargs):
+    from .archive_retention import purging
+    if purging.get():return
     from .status_monitor import cancel_watch
     from .workflow_state import syncing
     if not syncing.get():

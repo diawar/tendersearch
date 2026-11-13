@@ -1,0 +1,12 @@
+<section class="panel preparation-guide" id="preparation-guide" data-bin-ready="{{ company_bin|yesno:'true,false' }}" data-workflow="{{ preparation_workflow_stage }}" data-saved="{{ preparation|yesno:'true,false' }}" data-draft-ready="{{ preparation.portal_description_saved_at|yesno:'true,false' }}" data-submitted="{% if preparation.portal_state == 'submitted' or preparation.portal_state == 'completed' %}true{% else %}false{% endif %}">
+<div class="preparation-current"><div><span class="eyebrow">Следующий шаг</span><h2 data-current-step>Проверьте требования и заполните подготовку</h2><p data-current-help>Сохранение данных и создание черновика не означают подачу заявки.</p></div><a class="button preparation-cta" data-next-step href="#prep-step-1">Перейти к шагу</a></div>
+<nav aria-label="Шаги подготовки заявки" class="preparation-step-nav">
+<a href="#prep-step-1" data-step="1"><b>1</b><span>Требования<small>Проверить спецификацию</small></span></a>
+<a href="#prep-step-2" data-step="2"><b>2</b><span>Товар и цена<small>Заполнить данные</small></span></a>
+<a href="#prep-step-3" data-step="3"><b>3</b><span>Реквизиты<small>Проверить и сохранить</small></span></a>
+<a href="#prep-step-4" data-step="4"><b>4</b><span>Калькулятор сделки<small>Проверка сделки</small></span></a>
+<a href="#prep-step-5" data-step="5"><b>5</b><span>Черновик<small>Создать на Госзакупе</small></span></a>
+<a href="#prep-step-6" data-step="6"><b>6</b><span>Подача и итоги<small>Подтверждение портала</small></span></a>
+</nav>
+<p class="muted">Шаги 1–5 — подготовка. Подписание и отправка выполняются на Госзакупе. Затем приложение проверяет подачу и итоги по БИН.</p>
+</section>

@@ -25,6 +25,7 @@
    const titles={draft:'Черновик создан',submitted:'Заявка подана',completed:'Заявка завершена на портале',unconfirmed:'Статус не подтверждён'};
    message.textContent='Отчёт сохранён. '+(titles[data.state]||'Статус не подтверждён')+(data.number?' · №'+data.number:'')+
     (data.description_saved?' · Описание товара заполнено':'')+
+    (report.state==='submitted'&&data.stage==='waiting_results'?'. Этап: «Ожидаем итоги». Проверка по БИН продолжается.':'')+
     (report.state==='submitted'&&data.stage==='applied'?'. Этап: «Подали заявку». Проверка итогов включена.':'')+
     (report.state==='unknown'?'. Текущее состояние не подтверждено; сохранено последнее подтверждение.':'');
    if(report.schema==='goszakup-restriction-v1')message.textContent='Сохранено для лота '+report.lot_number+': изъятие из национального режима — '+(data.national_withdrawn?'Да':'Нет')+'. Этап работы и статус заявки не изменены.';

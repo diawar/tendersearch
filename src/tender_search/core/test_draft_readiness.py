@@ -8,13 +8,14 @@ from .draft_readiness import readiness
 class DraftReadinessTests(TestCase):
     def setUp(self):test_draft_queue.DraftQueueTests.setUp(self)
 
-    def test_queue_reads_are_batched_and_do_not_build_hidden_workspace_page(self):
+    def test_queue_reads_and_visible_personal_controls_are_batched(self):
         from copy import deepcopy
         from unittest.mock import patch
         from django.test import RequestFactory
         from django.test.utils import CaptureQueriesContext
         from django.db import connection
         from .draft_queue import queue
+        from .views import result_context
         from .models import Lot, DraftQueueItem, UserLotWorkflow, CollectionLot
         original=ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot)
         profile=CollectionLot.objects.filter(profile__owner=self.owner,lot=self.lot).first().profile
@@ -29,9 +30,10 @@ class DraftReadinessTests(TestCase):
                 UserLotWorkflow.objects.update_or_create(owner=self.owner,lot=lot,defaults={'stage':'preparing'})
                 ApplicationPreparation.objects.create(owner=self.owner,lot=lot,company_bin=original.company_bin,data=original.data)
                 DraftQueueItem.objects.create(owner=self.owner,lot=lot)
-            with patch('tender_search.core.draft_queue.expire_draft_queue'), patch('tender_search.core.views.result_context') as hidden_page, CaptureQueriesContext(connection) as captured:
+            with patch('tender_search.core.draft_queue.expire_draft_queue'), patch('tender_search.core.views.result_context', wraps=result_context) as controls, CaptureQueriesContext(connection) as captured:
                 response=queue(request)
-            hidden_page.assert_not_called()
+            controls.assert_called_once()
+            self.assertEqual(len(controls.call_args.args[1]), total)
             self.assertEqual(response.status_code,200)
             self.assertEqual(response.content.count(b'data-queue-id='),total)
             counts.append(len(captured))

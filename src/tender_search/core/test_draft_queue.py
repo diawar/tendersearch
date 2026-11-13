@@ -31,7 +31,7 @@ class DraftQueueTests(TestCase):
         p=ApplicationPreparation.objects.get(owner=self.owner,lot=self.lot)
         self.assertEqual(p.portal_state,'unconfirmed')
         self.assertContains(self.client.get('/workspace/drafts/'),'Ожидает')
-        self.assertContains(self.client.get('/workspace/drafts/'),'Подготовка заявки')
+        self.assertContains(self.client.get('/workspace/drafts/'),'В работе')
         self.assertEqual(UserLotWorkflow.objects.get(owner=self.owner,lot=self.lot).stage,'preparing')
 
     def test_packet_registry_rows_do_not_require_repeat_consent(self):
@@ -75,6 +75,8 @@ class DraftQueueTests(TestCase):
         old=str(self.item.generation)
         self.client.post(self.base+'cancel/')
         self.assertEqual(self.post_progress().status_code,400)
+        from .workflow_state import add_to_preparation
+        add_to_preparation(self.owner.pk,self.lot.pk)
         self.client.post('/workspace/drafts/add/',{'lots':[str(self.lot.pk)]})
         self.item.refresh_from_db();self.assertNotEqual(str(self.item.generation),old)
         self.assertEqual(self.item.state,'queued')

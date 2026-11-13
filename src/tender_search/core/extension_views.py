@@ -30,7 +30,7 @@ def download_extension(request):
     origin=('https' if request.is_secure() or not local else 'http')+'://'+host
     origins=list(dict.fromkeys(['http://localhost:8000','http://127.0.0.1:8000',origin]))
     patterns=list(dict.fromkeys(urlsplit(value).scheme+'://'+urlsplit(value).hostname+path
-        for value in origins if urlsplit(value).hostname!='::1' for path in ('/lots/*/preparation/*','/workspace/drafts/')))
+        for value in origins if urlsplit(value).hostname!='::1' for path in ('/*',)))
     manifest['content_scripts'][0]['matches']=patterns
     with ZipFile(buffer,'w',ZIP_DEFLATED) as archive:
         for name in FILES:

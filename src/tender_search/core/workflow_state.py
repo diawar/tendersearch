@@ -4,10 +4,11 @@ import secrets
 from django.db import transaction
 from .models import CollectionLot, Favorite, AnnouncementWatch, SearchProfile, Lot, UserLotWorkflow
 from django.utils import timezone
+from .storage_lifecycle import lock_retention
 
-FAVORITE_STAGES = ('interesting', 'preparing', 'applied', 'contract', 'delivery', 'payment', 'won', 'lost')
-WATCH_STAGES = ('interesting', 'preparing', 'applied', 'contract')
-LOCKED_STAGES = ('applied', 'contract', 'delivery', 'payment', 'won', 'lost', 'archived')
+FAVORITE_STAGES = ('preparing', 'applied', 'waiting_results', 'contract', 'delivery', 'payment', 'won', 'lost')
+WATCH_STAGES = ('preparing', 'applied', 'waiting_results', 'contract')
+LOCKED_STAGES = ('waiting_results', 'applied', 'contract', 'delivery', 'payment', 'won', 'lost', 'archived')
 syncing = ContextVar('workflow_state_syncing', default=False)
 WORK_FIELDS = ('stage', 'outcome', 'expired_from_stage', 'result_tracking')
 
@@ -15,6 +16,7 @@ WORK_FIELDS = ('stage', 'outcome', 'expired_from_stage', 'result_tracking')
 def publish_workflow(item, created=False, update_fields=None):
     """New filter membership inherits work; an explicit edit updates every membership."""
     with transaction.atomic():
+        lock_retention(item.lot.announcement_id)
         state, fresh = UserLotWorkflow.objects.select_for_update().get_or_create(
             owner_id=item.profile.owner_id, lot_id=item.lot_id,
             defaults={field: getattr(item, field) for field in WORK_FIELDS})
@@ -32,6 +34,7 @@ def publish_workflow(item, created=False, update_fields=None):
 
 def update_workflow(owner_id, lot_id, **values):
     with transaction.atomic():
+        lock_retention(Lot.objects.values_list("announcement_id",flat=True).get(pk=lot_id))
         state, _ = UserLotWorkflow.objects.select_for_update().get_or_create(owner_id=owner_id, lot_id=lot_id)
         for field, value in values.items():
             setattr(state, field, value)
@@ -42,8 +45,11 @@ def update_workflow(owner_id, lot_id, **values):
         return state
 
 
+@transaction.atomic
 def inherit_workflows(owner_id, items):
     """Prepare bulk-created filter memberships without resetting existing decisions."""
+    for announcement_id in sorted(set(Lot.objects.filter(pk__in=[item.lot_id for item in items]).values_list("announcement_id",flat=True))):
+        lock_retention(announcement_id)
     states = {state.lot_id:state for state in UserLotWorkflow.objects.filter(owner_id=owner_id,
         lot_id__in=[item.lot_id for item in items])}
     for item in items:
@@ -126,29 +132,51 @@ def sync_lot(owner_id, lot_id):
         syncing.reset(token)
 
 
-def add_to_interesting(owner_id, lot_id):
+def add_to_preparation(owner_id, lot_id):
+    """Take a lot into work; never create a portal application here."""
+    from .models import DraftQueueItem
+    import uuid
     with transaction.atomic():
         list(SearchProfile.objects.select_for_update().filter(owner_id=owner_id).order_by('pk'))
         records = CollectionLot.objects.filter(profile__owner_id=owner_id, lot_id=lot_id)
+        if records.filter(stage__in=LOCKED_STAGES).exists():
+            return
         if not records.exists():
-            profile = manual_profile(owner_id)
-            CollectionLot.objects.create(profile=profile, lot_id=lot_id, stage='interesting')
-        if not records.filter(stage__in=(*LOCKED_STAGES, 'preparing')).exists():
+            CollectionLot.objects.create(profile=manual_profile(owner_id), lot_id=lot_id, stage='preparing')
+        if not records.filter(stage='preparing').exists():
             deadline = Lot.objects.get(pk=lot_id).announcement.deadline
-            update_workflow(owner_id, lot_id, stage='interesting', expired_from_stage='',
+            update_workflow(owner_id, lot_id, stage='preparing', expired_from_stage='',
                 outcome='', result_tracking=False, keep_after_deadline=bool(deadline and deadline <= timezone.now()))
+        from .models import PurgedUserLot
+        PurgedUserLot.objects.filter(owner_id=owner_id,lot_id=lot_id).delete()
+        item, _ = DraftQueueItem.objects.get_or_create(owner_id=owner_id, lot_id=lot_id)
+        if item.state == 'cancelled':
+            item.state='queued'; item.progress_phase=''; item.message=''; item.generation=uuid.uuid4()
+            item.save(update_fields=['state','progress_phase','message','generation','updated_at'])
         sync_lot(owner_id, lot_id)
+
+
+def add_to_interesting(owner_id, lot_id):
+    # Compatibility for already delivered Telegram buttons and older integrations.
+    return add_to_preparation(owner_id, lot_id)
 
 
 def remove_from_work(owner_id, lot_id):
+    from .models import DraftQueueItem
+    import uuid
     with transaction.atomic():
         list(SearchProfile.objects.select_for_update().filter(owner_id=owner_id).order_by('pk'))
         records = CollectionLot.objects.filter(profile__owner_id=owner_id, lot_id=lot_id)
-        if records.filter(stage__in=(*LOCKED_STAGES, 'preparing')).exists():
+        queue = DraftQueueItem.objects.select_for_update().filter(owner_id=owner_id,lot_id=lot_id).first()
+        if records.filter(stage__in=LOCKED_STAGES).exists() or (queue and queue.state in ('running','waiting')):
             return False
+        if queue:
+            queue.state='cancelled'; queue.generation=uuid.uuid4()
+            queue.save(update_fields=['state','generation','updated_at'])
         update_workflow(owner_id, lot_id, stage='not_participated', expired_from_stage='',
             outcome='', result_tracking=False, keep_after_deadline=False)
-        sync_lot(owner_id, lot_id)
+        from .fulfillment import pause_outcome
+        pause_outcome(owner_id,lot_id)
         return True
 
 

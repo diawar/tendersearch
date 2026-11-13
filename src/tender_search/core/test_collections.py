@@ -35,6 +35,18 @@ class CollectionsTests(TestCase):
         self.profile.refresh_from_db()
         update_collection(self.profile.pk, 'lease', self.profile.collection_revision)
 
+    def test_won_tab_contains_only_completed_stage_not_all_winning_outcomes(self):
+        self.run_refresh()
+        item = CollectionLot.objects.get(profile=self.profile)
+        for stage in ('contract', 'delivery', 'payment', 'archived', 'won'):
+            item.stage = stage
+            item.outcome = 'won'
+            item.save()
+            response = self.client.get('/workspace/', {'profile': self.profile.pk, 'stage': 'won'})
+            expected = 1 if stage == 'won' else 0
+            self.assertEqual(response.context['page'].paginator.count, expected)
+            self.assertEqual(next(step['count'] for step in response.context['steps'] if step['key'] == 'won'), expected)
+
     def test_refresh_uses_local_filter_without_telegram_and_preserves_workflow(self):
         with patch('tender_search.client.ZakupClient.search', side_effect=AssertionError('No network')):
             self.run_refresh()
@@ -57,7 +69,9 @@ class CollectionsTests(TestCase):
         work = CollectionLot.objects.get(lot__source_id=1)
         work.stage='payment'; work.save()
         starred = CollectionLot.objects.get(lot__source_id=2)
-        starred.stage='interesting';starred.save()
+        starred.stage='preparing';starred.save()
+        from .workflow_state import add_to_preparation
+        add_to_preparation(self.owner.pk,starred.lot_id)
         Favorite.objects.get_or_create(owner=self.owner, lot=starred.lot)[0]
         IndexedLot.objects.update(current=False)
         self.run_refresh()
@@ -66,8 +80,8 @@ class CollectionsTests(TestCase):
         self.assertEqual(response.context['page'].paginator.count, 0)
         payment = self.client.get('/workspace/', {'profile':self.profile.pk, 'stage':'payment'})
         self.assertEqual([item.lot.source_id for item in payment.context['page']], [1])
-        interesting = self.client.get('/workspace/', {'profile':self.profile.pk, 'stage':'interesting'})
-        self.assertEqual([item.lot.source_id for item in interesting.context['page']], [2])
+        interesting = self.client.get('/workspace/', {'profile':self.profile.pk, 'stage':'preparing'},follow=True)
+        self.assertEqual([item.lot.source_id for item in interesting.context['items']], [2])
 
     def test_partial_refresh_adds_new_matches_without_erasing_old_membership(self):
         self.run_refresh()
@@ -133,7 +147,7 @@ class CollectionsTests(TestCase):
         item=CollectionLot.objects.get()
         Favorite.objects.get_or_create(owner=self.owner,lot=item.lot)[0]
         set_watch(owner=self.owner,lot=item.lot,announcement=item.lot.announcement,enabled=True)
-        response=self.client.get('/workspace/',{'profile':self.profile.pk,'stage':'interesting'})
+        response=self.client.get('/workspace/',{'profile':self.profile.pk,'stage':'preparing'},follow=True)
         soup=BeautifulSoup(response.content,'html.parser')
         self.assertEqual(len(soup.select('.collection-tab')),3)
         self.assertEqual(len(soup.select('.funnel-step')),11)
@@ -158,8 +172,8 @@ class CollectionsTests(TestCase):
         item.refresh_from_db();independent.refresh_from_db()
         self.assertEqual((item.stage,item.outcome),('new',''))
         self.assertEqual(independent.stage,'new')
-        self.client.post(endpoint,{'stage':'interesting','outcome':'won'})
-        item.refresh_from_db();self.assertEqual((item.stage,item.outcome),('interesting',''))
+        self.client.post(endpoint,{'stage':'preparing','outcome':'won'})
+        item.refresh_from_db();self.assertEqual((item.stage,item.outcome),('preparing',''))
         self.client.post(endpoint,{'stage':'hacked','outcome':'lost'})
         item.refresh_from_db();self.assertEqual(item.outcome,'')
 
@@ -226,8 +240,8 @@ class CollectionsTests(TestCase):
         self.run_refresh(); item=CollectionLot.objects.get()
         item.stage='delivery';item.save()
         url=f'/lots/{item.lot_id}/note/'
-        response=self.client.post(url,{'note':'Доставить утром','return_to':'/workspace/?stage=interesting'})
-        self.assertIn('stage=interesting',response.url)
+        response=self.client.post(url,{'note':'Доставить утром','return_to':'/workspace/?stage=preparing'})
+        self.assertIn('stage=preparing',response.url)
         self.client.post(url,{'stage':'payment','outcome':'lost','note':'x'*10001})
         item.refresh_from_db()
         self.assertEqual(item.stage,'delivery')
@@ -255,7 +269,7 @@ class CollectionsTests(TestCase):
                     if url.startswith('/workspace/'):
                         item.refresh_from_db()
                         url += '&stage=' + ('all' if item.stage == 'new' else item.stage)
-                    response = self.client.get(url)
+                    response = self.client.get(url,follow=True)
                     self.assertEqual(response.status_code, 200)
                     actions = BeautifulSoup(response.content, 'html.parser').select_one(f'.lot-actions[data-lot-id="{lot.pk}"]')
                     self.assertIsNotNone(actions)
@@ -407,7 +421,8 @@ class CollectionsTests(TestCase):
     def test_stage_picker_and_inline_notes_hidden_all_stages_and_sort_links_work(self):
         self.run_refresh();item=CollectionLot.objects.get()
         for scope in ('all',str(self.profile.pk)):
-            for stage in ('new','interesting','applied','won','lost','not_participated','contract','delivery','payment'):
+            for stage in ('new','preparing','applied','won','lost','not_participated','contract','delivery','payment'):
+                if stage=='preparing':continue  # Work-stage controls are covered by queue tests.
                 item.stage=stage;item.outcome=stage if stage in ('won','lost') else '';item.save()
                 response=self.client.get('/workspace/',{'profile':scope,'stage':'all' if stage=='new' else stage})
                 soup=BeautifulSoup(response.content,'html.parser')

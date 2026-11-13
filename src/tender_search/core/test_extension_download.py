@@ -36,5 +36,5 @@ class ExtensionDownloadTests(TestCase):
             config=archive.read('goszakup-assistant/bridge-config.js').decode()
             self.assertIn('https://app.example.test',config)
             manifest=json.loads(archive.read('goszakup-assistant/manifest.json'))
-            self.assertIn('https://app.example.test/lots/*/preparation/*',manifest['content_scripts'][0]['matches'])
+            self.assertIn('https://app.example.test/*',manifest['content_scripts'][0]['matches'])
             self.assertNotIn('<all_urls>',json.dumps(manifest))
